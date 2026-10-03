@@ -1,0 +1,26 @@
+[package]
+name = "draft_tracker"
+version = "0.1.0"
+edition = "2024"
+description = "Track writing sessions, projects and word counts in a terminal UI backed by SQLite"
+default-run = "draft-tracker"
+
+# No license or repository declared yet: a license is a legal statement and is
+# the author's to choose, so it is left unset rather than guessed. Both fields,
+# plus a README, are needed before this is published.
+publish = false
+
+[[bin]]
+name = "draft-tracker"
+path = "src/main.rs"
+
+[lib]
+name = "draft_tracker"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = "0.4.45"
+dirs = "7.0.0"
+rusqlite = { version = "0.40.2", features = ["bundled", "chrono"] }
+thiserror = "2.0.21"
