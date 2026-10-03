@@ -107,7 +107,7 @@ This project is intended to go public as a portfolio piece, so the importer carr
 
 ### Input contract
 
-The importer reads every `.ods` and `.csv` in the given directory, taking the `Data` sheet of a workbook and the whole file of a CSV, and locates columns by header name, taking the leftmost match for each. Supporting CSV matters for a tool meant to be usable by someone else: a spreadsheet of this shape is a convenience, not a requirement, and a plain CSV is something a writer can produce from any journal, by hand, without owning LibreOffice.
+The importer reads every `.ods` and `.csv` in the given directory, taking the `Data` sheet of a workbook and the whole file of a CSV, and locates columns by header name, trimmed and matched without regard to case, taking the leftmost match for each. Leniency here costs nothing and spares a writer a failed import over a header reading `date` or `Day WC ` with a trailing space, which these very sheets contain. Supporting CSV matters for a tool meant to be usable by someone else: a spreadsheet of this shape is a convenience, not a requirement, and a plain CSV is something a writer can produce from any journal, by hand, without owning LibreOffice.
 
 Two kinds of file are recognised. An entries file is one whose headers include `Date`. A projects file is one carrying `Project` and `Status` but no `Date`, and it supplies the per-project metadata that a log of daily sessions cannot express. Detection is by header rather than by filename, so neither file has to be named a particular way.
 
@@ -117,7 +117,7 @@ Locating by name rather than position is what lets the derived block be ignored 
 
 `Type` is optional because a type belongs to a category, not to a row, so stating it once anywhere in the data is enough; blanks are ignored by the vote that resolves it. A category that is never typed anywhere aborts the import naming that category, so the data cannot produce a typeless category.
 
-A projects file requires `Project` and `Status`, where the status is `open`, `completed` or `abandoned`. It may also carry `Description`. A status is trimmed of surrounding whitespace and matched without regard to case, since the file is edited by hand and `Abandoned ` means what it says; an unrecognised value aborts the import naming the row, rather than guessing. A project named there but absent from every entries file is reported and skipped, since a project with no sessions has nothing to track; a project in the entries with no row in the projects file defaults to `open`. Every other column is ignored, which lets the file carry word counts, dates and categories as decision aids while it is being filled in without those becoming a second source of truth.
+A projects file requires `Project` and `Status`, where the status is `open`, `completed` or `abandoned`. It may also carry `Description`. A status is trimmed of surrounding whitespace and matched without regard to case, since the file is edited by hand and `Abandoned ` means what it says; an unrecognised value aborts the import naming the row, rather than guessing. Two rows for one project stop the import rather than one silently overriding the other, since there is no way to tell which the writer meant. A project named there but absent from every entries file is reported and skipped, since a project with no sessions has nothing to track; a project in the entries with no row in the projects file defaults to `open`. Every other column is ignored, which lets the file carry word counts, dates and categories as decision aids while it is being filled in without those becoming a second source of truth.
 
 `Category` is required as a header but may be blank on any individual row, for the same reason: a category belongs to the project, so stating it once is enough and the vote ignores blanks. This is what lets a supplementary file carry only the columns that change, naming projects that other files already categorise. A project with no category anywhere imports with a null `category_id` and is reported, appearing under `Uncategorized` in statistics rather than being dropped.
 
@@ -135,6 +135,8 @@ Either word-count column can drive an entry, and a writer will usually have only
 
 `Day WC` wins wherever both are present. Some projects have internal drift between their summed day counts and their `Project WC` series, because a Project WC can be reset mid-draft when a manuscript is restarted, so the two columns cannot both be honoured. The day counts are the record of work done, which is what the requirements ask to store.
 
+A name is trimmed and runs of whitespace inside it are collapsed to single spaces, with every change reported. A project or category differing from another only by a repeated space is a typo every time, and left alone it silently becomes a second record: a project split in two, or a phantom category with no projects in it. This is easy to introduce and invisible while editing, because OpenDocument stores a second consecutive space as a `<text:s/>` element rather than as a space character.
+
 A project is identified by its title and matched across files, so a project spanning several years becomes one record. Its category is the majority vote of its rows' `Category` values, ignoring blanks, and each category's type is the majority vote of the `Type` values on rows carrying it. Voting rather than last-write-wins means a single mistyped row cannot move a project, and it degrades gracefully on a sheet that was never cleaned up.
 
 Nothing is stored for work predating the data. Where a project's earliest entry has a `Project WC` exceeding its `Day WC`, the difference is words written before tracking began; the importer reports each such project and the number rather than inventing an entry or a stored baseline, because the honest fix is to import the earlier journal. No spreadsheet column records pre-tracking hours at all, so a words-only baseline would have skewed every rate metric upward anyway, which is the second reason not to keep one.
@@ -149,6 +151,8 @@ The three spreadsheets were normalized once to meet the contract above, by a scr
 
 One finding from that work is worth recording, because it would be easy to repeat. These sheets store formulas as strings beginning `of:=`, where the `of` prefix lives inside an attribute value rather than an element name. A naive XML round-trip emits namespace declarations only for prefixes it sees on element and attribute names, so it drops `xmlns:of` and every formula in the workbook becomes `Err:510`. The normalizer splices the original root start tag back into its output and refuses to write a file that has lost a declaration. Any future tool that rewrites these files needs the same care.
 
+A second finding came from the same corner of the format and is worth the same warning. OpenDocument writes a run of consecutive spaces as a `<text:s/>` element, so reading a cell by concatenating its text nodes drops them: a category entered as `SitR  Book` reads back as `SitR Book`, and a typo disappears. The analysis scripts used to plan this work did exactly that and reported one category fewer than the data held; the importer, which renders `<text:s/>` faithfully, found the extra one on its first run. Reading a cell means rendering it as a spreadsheet would, not concatenating its text.
+
 After normalization every category's type is decided unanimously, so the majority vote never has to break a tie on this data. It stays in the importer because another writer's sheets will not be as tidy.
 
 ### Verification
@@ -161,9 +165,9 @@ The normalized sheets were checked three ways before being installed: the derive
 | --- | --- | --- | --- |
 | 2023 | 124 | 34,261 | 56.00 |
 | 2024 | 320 | 244,148 | 314.00 |
-| 2025 | 207 | 186,457 | 220.00 |
+| 2025 | 207 | 186,457 | 220.50 |
 | 2026 | 3 | 1,799 | 3.00 |
-| Total | 654 | 466,665 | 593.00 |
+| Total | 654 | 466,665 | 593.50 |
 
 78 projects, 10 categories, 3 types. 239 rows skipped as no work logged, which covers both missed-day bookkeeping and blank future-dated rows. No project reports pre-tracking words, so every word and hour in the data belongs to a dated entry.
 
@@ -194,13 +198,35 @@ The app opens on the entry form, which is the daily path.
 
 Hours has a floor of 0.25 and zero is refused: submitting with less is blocked, with the reason shown rather than the keystroke silently doing nothing. This is a deliberate accounting rule, not a guard against bad input. A minute spent is counted as fifteen for the purpose of a words-per-hour figure, because a session rounded down to nothing produces an undefined or absurd rate and misrepresents the day. Encoding it means the figure can never be distorted by a session that claims no time. All 654 imported entries already satisfy it, and every recorded value is a multiple of a quarter hour.
 
-**Entry history** lists recent entries with a project filter, and edits or deletes one. This is what makes a mistyped 20,000 recoverable, which is the case the requirements call out.
+**Entry history** lists every entry, newest first, with a project filter, and edits or deletes one. This is what makes a mistyped 20,000 recoverable, which is the case the requirements call out.
 
-**Projects** lists every project with the derived metrics above, creates and edits them, and cycles status. Editing covers title, category, status and description. Status cycles on a single key, which is what makes a review pass over 78 projects quick.
+The number edited here is the session count itself, not a manuscript total. The entry form derives a session from a running total, but once a row is stored there is no unambiguous total to re-derive it from, since later entries have moved the running figure on. Editing the figure the row actually holds is the only honest option, and the panel labels it so, because the same words mean something different on the two screens.
 
-**Categories** lists categories with their type and description, and creates or edits them. Types are managed here too, since there are four of them and a separate screen would be overkill.
+Reassigning an entry to a different project is deliberately out of scope: it would need a second project picker inside the edit panel, and deleting the row and adding it again achieves the same thing. Every other field can be corrected in place.
 
-**Stats** is the dashboard, with Lifetime and the selected year as titled sections. The year selector is wired up in the MVP rather than deferred: the queries are year-parameterised anyway, so the only additional work is two keybindings, which is less effort than leaving a hardcoded year to remove later.
+The whole table is loaded rather than paged. A limit would silently put the oldest entries out of reach on the one screen whose job is fixing mistakes, and a writing life's worth of sessions is a few tens of thousands of rows.
+
+An edit left open is closed when the screen is left, with a message saying the change was discarded. Keeping it open would mean returning later to a panel holding changes with no memory of having started them, and quitting with an open edit asks for confirmation the same way an unsubmitted entry does.
+
+**Projects** lists every project with the derived metrics above, creates and edits them, and cycles status. Editing covers title, category, status and description. Status cycles on a single key with no panel opening, which is what makes a review pass over 78 projects quick; the list shows the compact figures and a pane beneath it gives the selected project's full set.
+
+Deleting a project is refused outright when it has entries, rather than offered behind a confirmation. `entries` cascades on delete, so agreeing to the prompt would destroy the record of the work done, and abandoning the project is what the writer almost always means instead. The refusal names the entry count and points at the status key. The repository enforces this too, independently of what the screen believes, so a stale list cannot destroy work.
+
+**Categories** shows categories and types side by side, in two panes that `Tab` moves between. Both can be created, edited and deleted. They sit on one screen because a type is a category's parent, and editing one while unable to see the other makes the hierarchy hard to reason about; three types did not justify a screen of their own.
+
+Deleting is refused while anything still points at the record, naming how many projects use a category or how many categories use a type. A category with no type cannot be saved, since the schema requires one, and the message says to create a type first rather than only refusing.
+
+A field whose value comes from a fixed set, a project's category and status and a category's type, steps with `h` and `l` rather than being typed. Pressing `i` on such a field says so instead of appearing to do nothing.
+
+**Stats** is the dashboard, with Lifetime and the selected year as titled sections. The year selector is wired up in the MVP rather than deferred: the queries are year-parameterised anyway, so the only additional work is two keybindings, which is less effort than leaving a hardcoded year to remove later. Each section also carries a words-per-hour figure, since it costs nothing to divide two numbers already on screen.
+
+Stepping moves between years that have entries rather than through the calendar, so a keystroke never lands on a year of zeroes; the current year is always offered even before anything is logged in it, so the screen a writer opens is the one they are living in. Either end says so rather than sitting mute.
+
+Bars are drawn with eighth-width block characters, so a short bar is not rounded away to nothing and a long one is not quantised to whole columns. A value that is not zero always draws at least one eighth.
+
+The category bar hands out its cells largest-remainder first, so the segments add up to the full width instead of leaving a gap to rounding. Shares are taken against the sum of the positive categories, not the year's net total: a revision-heavy category can net out below zero, a negative slice of a bar means nothing, and such a category is named beneath the bar instead of being silently dropped. The legend wraps onto as many lines as it needs and the panel grows to fit, because a legend that quietly loses its last entries is worse than one that takes an extra line.
+
+The project graph shows as many bars as there is room for and says how many it left out, rather than presenting a partial picture as if it were the whole.
 
 Creating a project that is already complete and predates 2024 is out of scope.
 
@@ -216,10 +242,13 @@ Leader is space. No control combinations are used anywhere.
 | `Tab` / `Shift-Tab` | next and previous field in a form |
 | `i` / `a`, `Esc` | begin and end editing a field |
 | `/`, `n`, `N` | filter a list and step matches |
+| `A` | on the entry form, widen the project list to completed and abandoned projects |
+| `o` | create a record on the projects or categories screen |
+| `h` / `l` | step a choice field while editing; switch pane on the categories screen |
 | `x` | cycle status on the projects list: open, completed, abandoned |
-| `dd` | delete, with a confirmation prompt |
+| `dd` | delete, then `y` to confirm; anything else keeps the row |
 | `<leader><CR>` | submit a form |
-| `[` / `]` / `0` | previous year, next year, back to current year on stats |
+| `[` / `]` / `0` | previous year, next year, back to current year on stats; `h` and `l` also step |
 | `q` | quit, confirming when a form has unsaved input |
 
 Submit is `<leader><CR>`. The requirements originally asked for `Ctrl-Enter`, which predates the no-control rule added afterwards; `mvp_design_doc.md` has been updated to match, so nothing in the app binds a control combination and the keymap is portable across mac, linux and windows.

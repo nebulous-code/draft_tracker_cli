@@ -507,3 +507,162 @@ fn reopening_a_file_preserves_what_was_written() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ------------------------------------------------------------ delete guards
+
+/// `entries` cascades on delete, so without a guard removing a project would
+/// quietly destroy the record of the work done on it.
+#[test]
+fn a_project_with_entries_cannot_be_deleted() {
+    let (db, project_id) = seeded();
+    add(&db, project_id, day(2026, 1, 1), 500, 1.0);
+    let err = repo::delete_project(db.conn(), project_id).unwrap_err();
+    match err {
+        DbError::ProjectHasEntries { entries, title } => {
+            assert_eq!(entries, 1);
+            assert_eq!(title, "Debris Sea");
+        }
+        other => panic!("expected ProjectHasEntries, got {other:?}"),
+    }
+    assert_eq!(
+        repo::list_projects(db.conn()).unwrap().len(),
+        1,
+        "still there"
+    );
+    assert_eq!(
+        repo::recent_entries(db.conn(), 10).unwrap().len(),
+        1,
+        "entry kept"
+    );
+}
+
+#[test]
+fn a_project_with_no_entries_can_be_deleted() {
+    let (db, project_id) = seeded();
+    repo::delete_project(db.conn(), project_id).unwrap();
+    assert!(repo::list_projects(db.conn()).unwrap().is_empty());
+}
+
+#[test]
+fn a_category_in_use_cannot_be_deleted() {
+    let db = Db::open_in_memory().unwrap();
+    let conn = db.conn();
+    let type_id = repo::ensure_type(conn, "Fiction").unwrap();
+    let cat_id = repo::ensure_category(conn, "Short Story", type_id).unwrap();
+    repo::insert_project(conn, "A", Some(cat_id), Status::Open, None).unwrap();
+    let err = repo::delete_category(conn, cat_id).unwrap_err();
+    assert!(
+        matches!(err, DbError::CategoryInUse { projects: 1, .. }),
+        "got {err:?}"
+    );
+
+    repo::update_project(conn, 1, "A", None, Status::Open, None).unwrap();
+    repo::delete_category(conn, cat_id).unwrap();
+}
+
+#[test]
+fn a_type_in_use_cannot_be_deleted() {
+    let db = Db::open_in_memory().unwrap();
+    let conn = db.conn();
+    let type_id = repo::ensure_type(conn, "Fiction").unwrap();
+    let cat_id = repo::ensure_category(conn, "Short Story", type_id).unwrap();
+    let err = repo::delete_type(conn, type_id).unwrap_err();
+    assert!(
+        matches!(err, DbError::TypeInUse { categories: 1, .. }),
+        "got {err:?}"
+    );
+
+    repo::delete_category(conn, cat_id).unwrap();
+    repo::delete_type(conn, type_id).unwrap();
+}
+
+#[test]
+fn a_duplicate_name_is_reported_as_a_clash_rather_than_a_constraint_message() {
+    let db = Db::open_in_memory().unwrap();
+    repo::insert_project(db.conn(), "Taken", None, Status::Open, None).unwrap();
+    let err = repo::insert_project(db.conn(), "Taken", None, Status::Open, None).unwrap_err();
+    let mapped = repo::name_taken(err, "Taken");
+    assert!(
+        matches!(mapped, DbError::NameTaken(ref n) if n == "Taken"),
+        "got {mapped:?}"
+    );
+    assert_eq!(mapped.to_string(), "\"Taken\" already exists");
+}
+
+// ------------------------------------------------------------ screen queries
+
+#[test]
+fn the_projects_query_returns_metrics_in_one_pass() {
+    let (db, project_id) = seeded();
+    add(&db, project_id, day(2026, 1, 1), 400, 0.25);
+    add(&db, project_id, day(2026, 1, 1), 200, 0.25);
+    add(&db, project_id, day(2026, 1, 3), 400, 0.5);
+    repo::insert_project(db.conn(), "Untouched", None, Status::Abandoned, None).unwrap();
+
+    let rows = repo::list_projects_with_metrics(db.conn()).unwrap();
+    assert_eq!(rows.len(), 2);
+    let sea = rows
+        .iter()
+        .find(|r| r.project.title == "Debris Sea")
+        .unwrap();
+    assert_eq!(sea.category_name.as_deref(), Some("Short Story"));
+    assert_eq!(sea.type_name.as_deref(), Some("Fiction"));
+    assert_eq!(sea.metrics.total_word_count, 1_000);
+    assert_eq!(sea.metrics.days_written, 2);
+    assert_eq!(sea.metrics.entry_count, 3);
+    assert_eq!(sea.metrics.hours_written, 1.0);
+    assert_eq!(sea.metrics.words_per_hour(), Some(1_000.0));
+    assert_eq!(sea.metrics.end_date, None, "still open");
+
+    // A project with no entries still appears, with nothing to divide by.
+    let other = rows
+        .iter()
+        .find(|r| r.project.title == "Untouched")
+        .unwrap();
+    assert_eq!(other.metrics.total_word_count, 0);
+    assert_eq!(other.metrics.words_per_hour(), None);
+    assert_eq!(other.category_name, None);
+}
+
+#[test]
+fn usage_counts_come_back_with_categories_and_types() {
+    let db = Db::open_in_memory().unwrap();
+    let conn = db.conn();
+    let fiction = repo::ensure_type(conn, "Fiction").unwrap();
+    repo::ensure_type(conn, "Non-Fiction").unwrap();
+    let story = repo::ensure_category(conn, "Short Story", fiction).unwrap();
+    repo::ensure_category(conn, "Kids Book", fiction).unwrap();
+    repo::insert_project(conn, "A", Some(story), Status::Open, None).unwrap();
+    repo::insert_project(conn, "B", Some(story), Status::Open, None).unwrap();
+
+    let cats = repo::list_categories_with_usage(conn).unwrap();
+    let story_row = cats
+        .iter()
+        .find(|c| c.category.name == "Short Story")
+        .unwrap();
+    assert_eq!(story_row.project_count, 2);
+    assert_eq!(story_row.type_name, "Fiction");
+    let kids = cats
+        .iter()
+        .find(|c| c.category.name == "Kids Book")
+        .unwrap();
+    assert_eq!(kids.project_count, 0);
+
+    let types = repo::list_types_with_usage(conn).unwrap();
+    assert_eq!(
+        types
+            .iter()
+            .find(|t| t.type_.name == "Fiction")
+            .unwrap()
+            .category_count,
+        2
+    );
+    assert_eq!(
+        types
+            .iter()
+            .find(|t| t.type_.name == "Non-Fiction")
+            .unwrap()
+            .category_count,
+        0
+    );
+}

@@ -1,0 +1,1956 @@
+//! Entry form behaviour, driven through the same key handler the terminal uses.
+
+use chrono::{Datelike, NaiveDate};
+use draft_tracker::db::models::{NewEntry, Status};
+use draft_tracker::db::{Db, repo};
+use draft_tracker::tui::app::{App, Flow, Screen, Tone};
+use draft_tracker::tui::entry::{Field, Mode, Problem};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+fn key(code: KeyCode) -> KeyEvent {
+    KeyEvent {
+        code,
+        modifiers: KeyModifiers::NONE,
+        kind: KeyEventKind::Press,
+        state: ratatui::crossterm::event::KeyEventState::NONE,
+    }
+}
+
+fn ch(c: char) -> KeyEvent {
+    key(KeyCode::Char(c))
+}
+
+fn type_str(app: &mut App, text: &str) {
+    for c in text.chars() {
+        app.on_key(ch(c)).unwrap();
+    }
+}
+
+fn day(y: i32, m: u32, d: u32) -> NaiveDate {
+    NaiveDate::from_ymd_opt(y, m, d).unwrap()
+}
+
+/// Three projects: one with history, one brand new, one completed.
+fn app_with_projects() -> App {
+    let db = Db::open_in_memory().unwrap();
+    {
+        let conn = db.conn();
+        let fiction = repo::ensure_type(conn, "Fiction").unwrap();
+        let book = repo::ensure_category(conn, "SitR Book", fiction).unwrap();
+
+        let fireside =
+            repo::insert_project(conn, "Fireside 1", Some(book), Status::Open, None).unwrap();
+        repo::insert_entry(
+            conn,
+            &NewEntry {
+                entry_date: day(2026, 1, 12),
+                project_id: fireside,
+                session_word_count: 15_429,
+                hours: 22.75,
+                notes: None,
+            },
+        )
+        .unwrap();
+
+        repo::insert_project(conn, "Brand New", Some(book), Status::Open, None).unwrap();
+        repo::insert_project(conn, "Shipped", Some(book), Status::Completed, None).unwrap();
+    }
+    App::new(db).unwrap()
+}
+
+/// Move the cursor to a field by tabbing, which is what a writer does.
+fn focus(app: &mut App, field: Field) {
+    for _ in 0..Field::ORDER.len() {
+        if app.form.field == field {
+            return;
+        }
+        app.on_key(key(KeyCode::Tab)).unwrap();
+    }
+    panic!("could not focus {field:?}");
+}
+
+fn select_title(app: &mut App, title: &str) {
+    focus(app, Field::Project);
+    for _ in 0..app.form.visible().len() {
+        if app.form.selected_project().map(|c| c.title.as_str()) == Some(title) {
+            return;
+        }
+        app.on_key(ch('j')).unwrap();
+    }
+    panic!("{title} not in the picker");
+}
+
+// ------------------------------------------------------------ the picker
+
+#[test]
+fn the_picker_opens_on_open_projects_only() {
+    let app = app_with_projects();
+    let titles: Vec<&str> = app
+        .form
+        .visible()
+        .iter()
+        .map(|c| c.title.as_str())
+        .collect();
+    assert_eq!(titles, vec!["Brand New", "Fireside 1"]);
+}
+
+#[test]
+fn capital_a_widens_the_picker_to_every_project() {
+    let mut app = app_with_projects();
+    app.on_key(ch('A')).unwrap();
+    assert_eq!(app.form.visible().len(), 3);
+    assert!(app.form.include_closed);
+    app.on_key(ch('A')).unwrap();
+    assert_eq!(app.form.visible().len(), 2);
+}
+
+#[test]
+fn widening_the_picker_keeps_the_cursor_on_the_same_project() {
+    let mut app = app_with_projects();
+    select_title(&mut app, "Fireside 1");
+    app.on_key(ch('A')).unwrap();
+    assert_eq!(app.form.selected_project().unwrap().title, "Fireside 1");
+}
+
+#[test]
+fn the_filter_narrows_the_picker_and_escape_clears_it() {
+    let mut app = app_with_projects();
+    app.on_key(ch('/')).unwrap();
+    assert_eq!(app.form.mode, Mode::Filter);
+    type_str(&mut app, "fire");
+    assert_eq!(app.form.visible().len(), 1);
+    assert_eq!(app.form.selected_project().unwrap().title, "Fireside 1");
+
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    assert_eq!(app.form.mode, Mode::Normal);
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    assert!(app.form.filter.is_empty());
+    assert_eq!(app.form.visible().len(), 2);
+}
+
+#[test]
+fn j_and_k_wrap_and_gg_and_capital_g_jump() {
+    let mut app = app_with_projects();
+    focus(&mut app, Field::Project);
+    assert_eq!(app.form.selected_index(), 0);
+    app.on_key(ch('k')).unwrap();
+    assert_eq!(
+        app.form.selected_index(),
+        1,
+        "k from the top wraps to the bottom"
+    );
+    app.on_key(ch('j')).unwrap();
+    assert_eq!(app.form.selected_index(), 0);
+    app.on_key(ch('G')).unwrap();
+    assert_eq!(app.form.selected_index(), 1);
+    app.on_key(ch('g')).unwrap();
+    app.on_key(ch('g')).unwrap();
+    assert_eq!(app.form.selected_index(), 0);
+}
+
+// ------------------------------------------------------------ fields
+
+#[test]
+fn tab_cycles_forward_and_shift_tab_back() {
+    let mut app = app_with_projects();
+    app.form.field = Field::Date;
+    app.on_key(key(KeyCode::Tab)).unwrap();
+    assert_eq!(app.form.field, Field::Project);
+    app.on_key(key(KeyCode::BackTab)).unwrap();
+    assert_eq!(app.form.field, Field::Date);
+    app.on_key(key(KeyCode::BackTab)).unwrap();
+    assert_eq!(app.form.field, Field::Notes, "cycles round");
+}
+
+#[test]
+fn typing_only_reaches_a_field_in_insert_mode() {
+    let mut app = app_with_projects();
+    focus(&mut app, Field::Hours);
+    type_str(&mut app, "1.5");
+    assert_eq!(
+        app.form.hours, "",
+        "normal mode keys are commands, not text"
+    );
+
+    app.on_key(ch('i')).unwrap();
+    assert_eq!(app.form.mode, Mode::Insert);
+    type_str(&mut app, "1.5");
+    assert_eq!(app.form.hours, "1.5");
+    app.on_key(key(KeyCode::Backspace)).unwrap();
+    assert_eq!(app.form.hours, "1.");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    assert_eq!(app.form.mode, Mode::Normal);
+}
+
+#[test]
+fn the_date_defaults_to_today() {
+    let app = app_with_projects();
+    assert_eq!(app.form.date, chrono::Local::now().date_naive().to_string());
+}
+
+// ------------------------------------------------------------ the preview
+
+#[test]
+fn a_typed_total_is_measured_against_what_is_already_logged() {
+    let mut app = app_with_projects();
+    select_title(&mut app, "Fireside 1");
+    focus(&mut app, Field::ProjectWords);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "15682");
+    let preview = app.form.preview();
+    assert!(!preview.first_entry);
+    assert_eq!(preview.session_words, Some(253));
+}
+
+#[test]
+fn a_projects_first_entry_takes_the_typed_number_as_the_session() {
+    let mut app = app_with_projects();
+    select_title(&mut app, "Brand New");
+    focus(&mut app, Field::ProjectWords);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "1200");
+    let preview = app.form.preview();
+    assert!(
+        preview.first_entry,
+        "nothing logged yet, so there is no total to subtract"
+    );
+    assert_eq!(preview.session_words, Some(1_200));
+}
+
+#[test]
+fn words_per_hour_normalises_a_short_session() {
+    let mut app = app_with_projects();
+    select_title(&mut app, "Brand New");
+    focus(&mut app, Field::Hours);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "0.25");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    focus(&mut app, Field::ProjectWords);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "100");
+    // 100 words in a quarter hour is 400 an hour.
+    assert_eq!(app.form.preview().words_per_hour, Some(400.0));
+}
+
+#[test]
+fn a_revision_day_previews_a_negative_session_and_a_negative_rate() {
+    let mut app = app_with_projects();
+    select_title(&mut app, "Fireside 1");
+    focus(&mut app, Field::Hours);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "1");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    focus(&mut app, Field::ProjectWords);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "14099");
+    let preview = app.form.preview();
+    assert_eq!(preview.session_words, Some(-1_330));
+    assert_eq!(preview.words_per_hour, Some(-1_330.0));
+}
+
+#[test]
+fn a_thousands_separator_in_a_typed_count_is_accepted() {
+    let mut app = app_with_projects();
+    select_title(&mut app, "Brand New");
+    focus(&mut app, Field::ProjectWords);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "1,200");
+    assert_eq!(app.form.preview().session_words, Some(1_200));
+}
+
+// ------------------------------------------------------------ validation
+
+#[test]
+fn the_hours_minimum_is_refused_with_a_reason() {
+    let mut app = app_with_projects();
+    select_title(&mut app, "Brand New");
+    focus(&mut app, Field::Hours);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "0");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    focus(&mut app, Field::ProjectWords);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "500");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+
+    assert!(
+        app.form
+            .problems()
+            .contains(&Problem::HoursTooShort("0".into()))
+    );
+    // Submit is blocked and says why, rather than doing nothing.
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+    let flash = app.flash.as_ref().expect("a reason was shown");
+    assert_eq!(flash.tone, Tone::Error);
+    assert!(flash.text.contains("minimum"), "got {:?}", flash.text);
+    assert_eq!(
+        repo::recent_entries(app.db.conn(), 10).unwrap().len(),
+        1,
+        "nothing written"
+    );
+}
+
+#[test]
+fn an_unparseable_field_is_named() {
+    let mut app = app_with_projects();
+    select_title(&mut app, "Brand New");
+    focus(&mut app, Field::Date);
+    app.on_key(ch('i')).unwrap();
+    for _ in 0..12 {
+        app.on_key(key(KeyCode::Backspace)).unwrap();
+    }
+    type_str(&mut app, "the 3rd");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    assert!(
+        app.form
+            .problems()
+            .contains(&Problem::BadDate("the 3rd".into()))
+    );
+}
+
+// ------------------------------------------------------------ submitting
+
+#[test]
+fn leader_enter_writes_the_entry_and_clears_the_session_fields() {
+    let mut app = app_with_projects();
+    select_title(&mut app, "Fireside 1");
+    focus(&mut app, Field::Hours);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "1");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    focus(&mut app, Field::ProjectWords);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "15682");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    focus(&mut app, Field::Notes);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "a good morning");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+
+    let date = app.form.date.clone();
+    app.on_key(ch(' ')).unwrap();
+    assert!(app.leader_pending);
+    app.on_key(key(KeyCode::Enter)).unwrap();
+
+    let flash = app.flash.as_ref().expect("confirmation shown");
+    assert_eq!(flash.tone, Tone::Success);
+    assert!(flash.text.contains("253"), "got {:?}", flash.text);
+
+    let entries = repo::recent_entries(app.db.conn(), 10).unwrap();
+    assert_eq!(entries.len(), 2);
+    let newest = entries
+        .iter()
+        .find(|e| e.session_word_count == 253)
+        .expect("the new entry");
+    assert_eq!(newest.hours, 1.0);
+    assert_eq!(newest.notes.as_deref(), Some("a good morning"));
+
+    // The session fields clear; the date stays, because another entry the same
+    // day is the common next action.
+    assert_eq!(app.form.hours, "");
+    assert_eq!(app.form.project_words, "");
+    assert_eq!(app.form.notes, "");
+    assert_eq!(app.form.date, date);
+}
+
+#[test]
+fn the_running_total_updates_so_the_next_entry_measures_correctly() {
+    let mut app = app_with_projects();
+    select_title(&mut app, "Fireside 1");
+    assert_eq!(app.form.selected_project().unwrap().logged_words, 15_429);
+
+    focus(&mut app, Field::Hours);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "1");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    focus(&mut app, Field::ProjectWords);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "15682");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+
+    select_title(&mut app, "Fireside 1");
+    assert_eq!(app.form.selected_project().unwrap().logged_words, 15_682);
+}
+
+#[test]
+fn a_brand_new_project_stops_being_a_first_entry_after_one_submit() {
+    let mut app = app_with_projects();
+    select_title(&mut app, "Brand New");
+    assert!(app.form.selected_project().unwrap().is_first_entry());
+
+    focus(&mut app, Field::Hours);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "2");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    focus(&mut app, Field::ProjectWords);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "900");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+
+    select_title(&mut app, "Brand New");
+    let choice = app.form.selected_project().unwrap();
+    assert!(!choice.is_first_entry());
+    assert_eq!(choice.logged_words, 900);
+}
+
+// ------------------------------------------------------------ chrome
+
+#[test]
+fn question_mark_opens_the_help_and_any_key_closes_it() {
+    let mut app = app_with_projects();
+    app.on_key(ch('?')).unwrap();
+    assert!(app.help_visible);
+    app.on_key(ch('j')).unwrap();
+    assert!(!app.help_visible);
+    assert_eq!(app.form.selected_index(), 0, "the closing key is swallowed");
+}
+
+#[test]
+fn quitting_is_immediate_when_nothing_has_been_typed() {
+    let mut app = app_with_projects();
+    assert_eq!(app.on_key(ch('q')).unwrap(), Flow::Quit);
+}
+
+#[test]
+fn quitting_with_an_unsaved_entry_asks_first() {
+    let mut app = app_with_projects();
+    focus(&mut app, Field::Hours);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "1.5");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+
+    assert_eq!(app.on_key(ch('q')).unwrap(), Flow::Continue);
+    assert!(app.confirming_quit);
+    assert_eq!(
+        app.on_key(ch('n')).unwrap(),
+        Flow::Continue,
+        "anything else stays"
+    );
+    assert!(!app.confirming_quit);
+
+    app.on_key(ch('q')).unwrap();
+    assert_eq!(app.on_key(ch('q')).unwrap(), Flow::Quit);
+}
+
+#[test]
+fn leader_keys_reach_every_screen() {
+    let mut app = app_with_projects();
+    for (leader_key, expected) in [
+        ('h', Screen::History),
+        ('p', Screen::Projects),
+        ('c', Screen::Categories),
+        ('s', Screen::Stats),
+        ('e', Screen::Entry),
+    ] {
+        app.on_key(ch(' ')).unwrap();
+        app.on_key(ch(leader_key)).unwrap();
+        assert_eq!(
+            app.screen, expected,
+            "<leader>{leader_key} should reach {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn an_unbound_leader_key_says_so() {
+    let mut app = app_with_projects();
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(ch('z')).unwrap();
+    assert_eq!(app.screen, Screen::Entry);
+    assert!(app.flash.as_ref().unwrap().text.contains("not bound"));
+}
+
+#[test]
+fn a_key_release_is_ignored_so_input_is_not_doubled() {
+    let mut app = app_with_projects();
+    focus(&mut app, Field::Hours);
+    app.on_key(ch('i')).unwrap();
+    let mut release = ch('7');
+    release.kind = KeyEventKind::Release;
+    app.on_key(release).unwrap();
+    assert_eq!(app.form.hours, "");
+}
+
+// ------------------------------------------------------------ drawing
+
+/// Render into a fixed-size buffer and return it as lines of text.
+fn render(app: &mut App, width: u16, height: u16) -> Vec<String> {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| draft_tracker::tui::draw::draw(frame, app))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn the_entry_form_shows_the_figures_it_worked_out() {
+    let mut app = app_with_projects();
+    select_title(&mut app, "Fireside 1");
+    focus(&mut app, Field::Hours);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "1");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    focus(&mut app, Field::ProjectWords);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "15682");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+
+    let screen = render(&mut app, 86, 22).join("\n");
+    for expected in [
+        "Draft Tracker",
+        "Fireside 1",
+        "Session WC",
+        "253",
+        "Words/Hour",
+        // The reference total is on screen, so a surprising session can be
+        // reasoned about without leaving the form.
+        "logged so far 15,429",
+        "<leader><CR> submit",
+    ] {
+        assert!(
+            screen.contains(expected),
+            "{expected:?} missing from:\n{screen}"
+        );
+    }
+}
+
+#[test]
+fn a_first_entry_is_labelled_on_screen_rather_than_only_in_the_arithmetic() {
+    let mut app = app_with_projects();
+    select_title(&mut app, "Brand New");
+    let screen = render(&mut app, 86, 22).join("\n");
+    assert!(screen.contains("first entry"), "got:\n{screen}");
+    assert!(
+        screen.contains("type the words written today"),
+        "the one place the field means something different must say so:\n{screen}"
+    );
+    assert!(
+        screen.contains("not the manuscript total"),
+        "got:\n{screen}"
+    );
+}
+
+#[test]
+fn a_negative_session_is_spelled_out_on_screen() {
+    let mut app = app_with_projects();
+    select_title(&mut app, "Fireside 1");
+    focus(&mut app, Field::ProjectWords);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "14099");
+    let screen = render(&mut app, 86, 22).join("\n");
+    assert!(screen.contains("-1,330"), "got:\n{screen}");
+    assert!(screen.contains("cut 1,330 words"), "got:\n{screen}");
+}
+
+#[test]
+fn the_help_overlay_lists_the_bindings() {
+    let mut app = app_with_projects();
+    app.on_key(ch('?')).unwrap();
+    let screen = render(&mut app, 86, 26).join("\n");
+    assert!(screen.contains("Keys"));
+    assert!(screen.contains("<leader><CR>"));
+    assert!(screen.contains("No binding uses a control key."));
+}
+
+#[test]
+fn a_terminal_too_small_to_draw_says_so_instead_of_drawing_nonsense() {
+    let mut app = app_with_projects();
+    let screen = render(&mut app, 40, 10).join("\n");
+    assert!(screen.contains("too small"), "got:\n{screen}");
+    assert!(
+        screen.contains("56x16"),
+        "the required size must survive wrapping:\n{screen}"
+    );
+}
+
+/// Not an assertion: prints the frame so the layout can be read by eye.
+/// Run with `cargo test --test tui -- --nocapture show_the_entry_form`.
+#[test]
+fn show_the_first_entry_form() {
+    let mut app = app_with_projects();
+    select_title(&mut app, "Brand New");
+    focus(&mut app, Field::Hours);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "0.5");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    focus(&mut app, Field::ProjectWords);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "640");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    for line in render(&mut app, 86, 20) {
+        println!("|{line}");
+    }
+}
+
+#[test]
+fn show_the_entry_form() {
+    let mut app = app_with_projects();
+    select_title(&mut app, "Fireside 1");
+    focus(&mut app, Field::Hours);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "1");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    focus(&mut app, Field::ProjectWords);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "15682");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    for line in render(&mut app, 86, 20) {
+        println!("|{line}");
+    }
+}
+
+// ============================================================ entry history
+
+use draft_tracker::tui::history::{EditField, EditProblem};
+
+/// Two projects with a few sessions each, newest last in insertion order.
+fn app_with_history() -> App {
+    let db = Db::open_in_memory().unwrap();
+    {
+        let conn = db.conn();
+        let fiction = repo::ensure_type(conn, "Fiction").unwrap();
+        let book = repo::ensure_category(conn, "SitR Book", fiction).unwrap();
+        let novel =
+            repo::insert_project(conn, "Fireside 1", Some(book), Status::Open, None).unwrap();
+        let story =
+            repo::insert_project(conn, "Glowstones", Some(book), Status::Open, None).unwrap();
+
+        let add = |project_id, d: (i32, u32, u32), words, hours, note: Option<&str>| {
+            repo::insert_entry(
+                conn,
+                &NewEntry {
+                    entry_date: day(d.0, d.1, d.2),
+                    project_id,
+                    session_word_count: words,
+                    hours,
+                    notes: note.map(str::to_string),
+                },
+            )
+            .unwrap()
+        };
+        add(novel, (2026, 1, 12), 253, 1.0, Some("a slow start"));
+        add(story, (2026, 1, 13), 880, 1.5, None);
+        add(novel, (2026, 1, 14), 20_000, 1.0, Some("meant 2,000"));
+    }
+    App::new(db).unwrap()
+}
+
+fn to_history(app: &mut App) {
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(ch('h')).unwrap();
+    assert_eq!(app.screen, Screen::History);
+}
+
+fn select_entry_with_words(app: &mut App, words: i64) {
+    for _ in 0..app.history.visible().len() {
+        if app
+            .history
+            .selected_row()
+            .map(|r| r.entry.session_word_count)
+            == Some(words)
+        {
+            return;
+        }
+        app.on_key(ch('j')).unwrap();
+    }
+    panic!("no entry of {words} words");
+}
+
+#[test]
+fn the_history_lists_newest_first() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    let dates: Vec<String> = app
+        .history
+        .visible()
+        .iter()
+        .map(|r| r.entry.entry_date.to_string())
+        .collect();
+    assert_eq!(dates, vec!["2026-01-14", "2026-01-13", "2026-01-12"]);
+}
+
+#[test]
+fn the_history_filters_by_project() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    app.on_key(ch('/')).unwrap();
+    type_str(&mut app, "glow");
+    assert_eq!(app.history.visible().len(), 1);
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    assert_eq!(app.history.visible().len(), 3);
+}
+
+#[test]
+fn the_edit_panel_prefills_the_session_count_not_a_running_total() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    select_entry_with_words(&mut app, 253);
+    app.on_key(ch('i')).unwrap();
+    let edit = app.history.edit.as_ref().expect("panel open");
+    // 253 is the session; the project's running total is 20,253. Editing the
+    // total here would be ambiguous, so the row's own figure is what is shown.
+    assert_eq!(edit.session_words, "253");
+    assert_eq!(edit.date, "2026-01-12");
+    assert_eq!(edit.hours, "1");
+    assert_eq!(edit.notes, "a slow start");
+    assert_eq!(
+        edit.field,
+        EditField::SessionWords,
+        "the field most likely to need fixing"
+    );
+}
+
+/// The case the screen exists for.
+#[test]
+fn a_mistyped_word_count_can_be_corrected() {
+    let mut app = app_with_history();
+    let project_id = {
+        let rows = repo::recent_entries_with_project(app.db.conn(), None).unwrap();
+        rows.iter()
+            .find(|r| r.entry.session_word_count == 20_000)
+            .unwrap()
+            .entry
+            .project_id
+    };
+    assert_eq!(
+        repo::project_logged_total(app.db.conn(), project_id).unwrap(),
+        20_253
+    );
+
+    to_history(&mut app);
+    select_entry_with_words(&mut app, 20_000);
+    app.on_key(ch('i')).unwrap();
+    app.on_key(ch('i')).unwrap(); // into insert on Session WC
+    for _ in 0..6 {
+        app.on_key(key(KeyCode::Backspace)).unwrap();
+    }
+    type_str(&mut app, "2000");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+
+    assert!(app.history.edit.is_none(), "the panel closes on save");
+    assert_eq!(app.flash.as_ref().unwrap().tone, Tone::Success);
+    assert_eq!(
+        repo::project_logged_total(app.db.conn(), project_id).unwrap(),
+        2_253
+    );
+    // And the entry form now measures against the corrected total.
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(ch('e')).unwrap();
+    select_title(&mut app, "Fireside 1");
+    assert_eq!(app.form.selected_project().unwrap().logged_words, 2_253);
+}
+
+#[test]
+fn an_edit_below_the_hours_minimum_is_refused_with_a_reason() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    select_entry_with_words(&mut app, 253);
+    app.on_key(ch('i')).unwrap();
+    for _ in 0..EditField::ORDER.len() {
+        if app.history.edit.as_ref().unwrap().field == EditField::Hours {
+            break;
+        }
+        app.on_key(key(KeyCode::Tab)).unwrap();
+    }
+    app.on_key(ch('i')).unwrap();
+    app.on_key(key(KeyCode::Backspace)).unwrap();
+    type_str(&mut app, "0");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+
+    assert!(
+        app.history
+            .edit
+            .as_ref()
+            .unwrap()
+            .problems()
+            .contains(&EditProblem::HoursTooShort("0".into()))
+    );
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+    assert_eq!(app.flash.as_ref().unwrap().tone, Tone::Error);
+    assert!(
+        app.history.edit.is_some(),
+        "the panel stays open so it can be fixed"
+    );
+    let stored = repo::recent_entries(app.db.conn(), 10).unwrap();
+    assert!(stored.iter().all(|e| e.hours >= 0.25));
+}
+
+#[test]
+fn escape_discards_an_edit_and_says_so() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    select_entry_with_words(&mut app, 253);
+    app.on_key(ch('i')).unwrap();
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "9");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    app.on_key(key(KeyCode::Esc)).unwrap();
+
+    assert!(app.history.edit.is_none());
+    assert_eq!(app.flash.as_ref().unwrap().text, "edit discarded");
+    assert_eq!(
+        repo::project_logged_total(app.db.conn(), 1).unwrap(),
+        20_253,
+        "unchanged"
+    );
+}
+
+#[test]
+fn closing_an_unchanged_edit_says_nothing() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    app.on_key(ch('i')).unwrap();
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    assert!(app.history.edit.is_none());
+    assert!(
+        app.flash.is_none(),
+        "nothing was lost, so nothing to report"
+    );
+}
+
+#[test]
+fn deleting_takes_two_d_keystrokes_and_a_confirmation() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    select_entry_with_words(&mut app, 880);
+
+    app.on_key(ch('d')).unwrap();
+    assert!(!app.history.confirming_delete, "one d only arms it");
+    app.on_key(ch('d')).unwrap();
+    assert!(app.history.confirming_delete);
+
+    app.on_key(ch('y')).unwrap();
+    assert_eq!(app.history.visible().len(), 2);
+    assert_eq!(repo::recent_entries(app.db.conn(), 10).unwrap().len(), 2);
+    assert_eq!(app.flash.as_ref().unwrap().tone, Tone::Success);
+}
+
+#[test]
+fn a_delete_is_abandoned_by_anything_other_than_y() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    app.on_key(ch('d')).unwrap();
+    app.on_key(ch('d')).unwrap();
+    app.on_key(ch('n')).unwrap();
+    assert!(!app.history.confirming_delete);
+    assert_eq!(repo::recent_entries(app.db.conn(), 10).unwrap().len(), 3);
+    assert_eq!(app.flash.as_ref().unwrap().text, "kept");
+}
+
+#[test]
+fn a_stray_d_does_not_linger_into_the_next_keystroke() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    app.on_key(ch('d')).unwrap();
+    app.on_key(ch('j')).unwrap();
+    app.on_key(ch('d')).unwrap();
+    assert!(!app.history.confirming_delete, "d j d must not delete");
+}
+
+#[test]
+fn deleting_an_entry_updates_the_projects_running_total() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    select_entry_with_words(&mut app, 20_000);
+    let project_id = app.history.selected_row().unwrap().entry.project_id;
+    app.on_key(ch('d')).unwrap();
+    app.on_key(ch('d')).unwrap();
+    app.on_key(ch('y')).unwrap();
+    assert_eq!(
+        repo::project_logged_total(app.db.conn(), project_id).unwrap(),
+        253
+    );
+}
+
+#[test]
+fn leaving_the_screen_discards_an_open_edit_rather_than_hiding_it() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    app.on_key(ch('i')).unwrap();
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "5");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(ch('e')).unwrap();
+    assert_eq!(app.screen, Screen::Entry);
+    assert!(
+        app.history.edit.is_none(),
+        "an edit left open would be a trap on return"
+    );
+    assert_eq!(app.flash.as_ref().unwrap().text, "edit discarded");
+}
+
+#[test]
+fn quitting_with_an_open_changed_edit_asks_first() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    app.on_key(ch('i')).unwrap();
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "7");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    assert_eq!(app.on_key(ch('q')).unwrap(), Flow::Continue);
+    assert!(app.confirming_quit);
+}
+
+#[test]
+fn an_entry_added_on_the_form_appears_in_the_history() {
+    let mut app = app_with_history();
+    select_title(&mut app, "Glowstones");
+    focus(&mut app, Field::Hours);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "0.75");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    focus(&mut app, Field::ProjectWords);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "1380");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+
+    to_history(&mut app);
+    assert_eq!(app.history.visible().len(), 4);
+    assert!(
+        app.history
+            .visible()
+            .iter()
+            .any(|r| r.entry.session_word_count == 500),
+        "1380 typed against 880 logged is a 500 word session"
+    );
+}
+
+#[test]
+fn the_history_screen_renders_its_columns() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    let screen = render(&mut app, 100, 18).join("\n");
+    for expected in [
+        "Entries (3)",
+        "2026-01-14",
+        "Fireside 1",
+        "20,000",
+        "1.00h",
+        "meant 2,000",
+    ] {
+        assert!(
+            screen.contains(expected),
+            "{expected:?} missing from:\n{screen}"
+        );
+    }
+    assert!(
+        screen.contains("i edits"),
+        "the status bar names the actions:\n{screen}"
+    );
+}
+
+#[test]
+fn the_edit_panel_renders_over_the_list() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    select_entry_with_words(&mut app, 253);
+    app.on_key(ch('i')).unwrap();
+    let screen = render(&mut app, 100, 24).join("\n");
+    assert!(screen.contains("Edit entry"), "got:\n{screen}");
+    assert!(
+        screen.contains("the words in this row, not a total"),
+        "got:\n{screen}"
+    );
+    assert!(
+        screen.contains("Entries (3)"),
+        "the list stays visible:\n{screen}"
+    );
+}
+
+#[test]
+fn the_delete_prompt_names_what_would_go() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    select_entry_with_words(&mut app, 20_000);
+    app.on_key(ch('d')).unwrap();
+    app.on_key(ch('d')).unwrap();
+    let screen = render(&mut app, 100, 18).join("\n");
+    assert!(
+        screen.contains("delete 20,000 words on Fireside 1"),
+        "got:\n{screen}"
+    );
+    assert!(screen.contains("y deletes"), "got:\n{screen}");
+}
+
+/// Not an assertion: prints the frame so the layout can be read by eye.
+#[test]
+fn show_the_history_screen() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    select_entry_with_words(&mut app, 20_000);
+    app.on_key(ch('i')).unwrap();
+    for line in render(&mut app, 96, 20) {
+        println!("|{line}");
+    }
+}
+
+/// Runs only where the author's own (gitignored) journals are present: proves the
+/// screens cope with the real volume, not just a handful of fixture rows.
+#[test]
+fn the_screens_handle_the_authors_real_journals() {
+    let dir = std::path::Path::new("historic_trackers");
+    if !dir.join("Writing Journal 2024.ods").exists() {
+        eprintln!("skipping: {} not present", dir.display());
+        return;
+    }
+    let mut db = Db::open_in_memory().unwrap();
+    draft_tracker::import::run(&mut db, dir, draft_tracker::import::Existing::Refuse).unwrap();
+    let mut app = App::new(db).unwrap();
+
+    // Every entry is reachable, so G really does reach the oldest.
+    to_history(&mut app);
+    assert_eq!(app.history.visible().len(), 654);
+    app.on_key(ch('G')).unwrap();
+    assert_eq!(
+        app.history
+            .selected_row()
+            .unwrap()
+            .entry
+            .entry_date
+            .to_string(),
+        "2023-11-01"
+    );
+    let screen = render(&mut app, 100, 24).join("\n");
+    assert!(screen.contains("Entries (654)"), "got:\n{screen}");
+
+    // The picker opens on the eight open projects, not all seventy-eight.
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(ch('e')).unwrap();
+    assert_eq!(app.form.visible().len(), 8);
+    app.on_key(ch('A')).unwrap();
+    assert_eq!(app.form.visible().len(), 78);
+    let screen = render(&mut app, 100, 24).join("\n");
+    assert!(screen.contains("Projects (78)"), "got:\n{screen}");
+}
+
+// ============================================================ projects screen
+
+use draft_tracker::tui::categories::Pane;
+use draft_tracker::tui::projects::Field as PField;
+
+fn to_screen(app: &mut App, key_char: char, expected: Screen) {
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(ch(key_char)).unwrap();
+    assert_eq!(app.screen, expected);
+}
+
+fn select_project(app: &mut App, title: &str) {
+    for _ in 0..app.projects.visible().len() {
+        if app
+            .projects
+            .selected_row()
+            .map(|r| r.project.title.as_str())
+            == Some(title)
+        {
+            return;
+        }
+        app.on_key(ch('j')).unwrap();
+    }
+    panic!("{title} not in the project list");
+}
+
+fn focus_project_field(app: &mut App, field: PField) {
+    for _ in 0..PField::ORDER.len() {
+        if app.projects.edit.as_ref().unwrap().field == field {
+            return;
+        }
+        app.on_key(key(KeyCode::Tab)).unwrap();
+    }
+    panic!("could not focus {field:?}");
+}
+
+#[test]
+fn the_projects_screen_shows_the_derived_figures() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    let row = app
+        .projects
+        .visible()
+        .iter()
+        .find(|r| r.project.title == "Fireside 1")
+        .copied()
+        .cloned()
+        .unwrap();
+    assert_eq!(row.metrics.total_word_count, 20_253);
+    assert_eq!(row.metrics.entry_count, 2);
+    assert_eq!(row.category_name.as_deref(), Some("SitR Book"));
+}
+
+#[test]
+fn x_cycles_a_projects_status_without_opening_a_panel() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    select_project(&mut app, "Fireside 1");
+    assert_eq!(
+        app.projects.selected_row().unwrap().project.status,
+        Status::Open
+    );
+
+    app.on_key(ch('x')).unwrap();
+    assert_eq!(
+        app.projects.selected_row().unwrap().project.status,
+        Status::Completed
+    );
+    assert!(app.projects.edit.is_none(), "no panel: this is a bulk pass");
+    assert!(app.flash.as_ref().unwrap().text.contains("completed"));
+
+    app.on_key(ch('x')).unwrap();
+    assert_eq!(
+        app.projects.selected_row().unwrap().project.status,
+        Status::Abandoned
+    );
+    app.on_key(ch('x')).unwrap();
+    assert_eq!(
+        app.projects.selected_row().unwrap().project.status,
+        Status::Open
+    );
+}
+
+#[test]
+fn a_status_change_reaches_the_entry_pickers_list_of_open_projects() {
+    let mut app = app_with_history();
+    assert_eq!(app.form.visible().len(), 2);
+    to_screen(&mut app, 'p', Screen::Projects);
+    select_project(&mut app, "Glowstones");
+    app.on_key(ch('x')).unwrap(); // completed
+    to_screen(&mut app, 'e', Screen::Entry);
+    let titles: Vec<&str> = app
+        .form
+        .visible()
+        .iter()
+        .map(|c| c.title.as_str())
+        .collect();
+    assert_eq!(
+        titles,
+        vec!["Fireside 1"],
+        "a completed project leaves the picker"
+    );
+}
+
+#[test]
+fn o_creates_a_project_ready_to_type_into() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    app.on_key(ch('o')).unwrap();
+    let edit = app.projects.edit.as_ref().unwrap();
+    assert!(edit.is_creating());
+    assert_eq!(edit.field, PField::Title);
+    assert_eq!(
+        edit.mode,
+        Mode::Insert,
+        "nothing to read first, so start typing"
+    );
+
+    type_str(&mut app, "A Wizard at Rest");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+
+    assert!(app.projects.edit.is_none());
+    assert!(
+        repo::project_id_by_title(app.db.conn(), "A Wizard at Rest")
+            .unwrap()
+            .is_some(),
+        "the project was written"
+    );
+    assert!(app.flash.as_ref().unwrap().text.contains("created"));
+}
+
+#[test]
+fn a_project_needs_a_title() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    app.on_key(ch('o')).unwrap();
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+    assert_eq!(app.flash.as_ref().unwrap().tone, Tone::Error);
+    assert!(
+        app.projects.edit.is_some(),
+        "the panel stays open to be fixed"
+    );
+}
+
+#[test]
+fn a_duplicate_title_is_reported_by_name() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    app.on_key(ch('o')).unwrap();
+    type_str(&mut app, "Fireside 1");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+    let flash = app.flash.as_ref().unwrap();
+    assert_eq!(flash.tone, Tone::Error);
+    assert!(
+        flash.text.contains("already exists"),
+        "got {:?}",
+        flash.text
+    );
+    assert_eq!(
+        repo::list_projects(app.db.conn()).unwrap().len(),
+        2,
+        "nothing created"
+    );
+}
+
+#[test]
+fn h_and_l_step_the_category_and_status_choices() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    select_project(&mut app, "Fireside 1");
+    app.on_key(ch('i')).unwrap();
+    focus_project_field(&mut app, PField::Category);
+
+    let before = app.projects.edit.as_ref().unwrap().category_id;
+    app.on_key(ch('l')).unwrap();
+    let after = app.projects.edit.as_ref().unwrap().category_id;
+    assert_ne!(before, after);
+    app.on_key(ch('h')).unwrap();
+    assert_eq!(
+        app.projects.edit.as_ref().unwrap().category_id,
+        before,
+        "h steps back"
+    );
+
+    // Uncategorized is reachable, since a project need not have a category.
+    app.on_key(ch('h')).unwrap();
+    assert_eq!(app.projects.edit.as_ref().unwrap().category_id, None);
+
+    focus_project_field(&mut app, PField::Status);
+    app.on_key(ch('l')).unwrap();
+    assert_eq!(
+        app.projects.edit.as_ref().unwrap().status,
+        Status::Completed
+    );
+}
+
+#[test]
+fn typing_into_a_choice_field_explains_itself_instead_of_doing_nothing() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    app.on_key(ch('i')).unwrap();
+    focus_project_field(&mut app, PField::Status);
+    app.on_key(ch('i')).unwrap();
+    assert_eq!(app.projects.edit.as_ref().unwrap().mode, Mode::Normal);
+    assert!(app.flash.as_ref().unwrap().text.contains("h and l"));
+}
+
+/// The guard that matters: deleting would cascade to the entries.
+#[test]
+fn deleting_a_project_with_entries_is_refused_outright() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    select_project(&mut app, "Fireside 1");
+    app.on_key(ch('d')).unwrap();
+    app.on_key(ch('d')).unwrap();
+
+    assert!(
+        !app.projects.confirming_delete,
+        "not even offered as a confirmation"
+    );
+    let flash = app.flash.as_ref().unwrap();
+    assert_eq!(flash.tone, Tone::Error);
+    assert!(flash.text.contains("2 entries"), "got {:?}", flash.text);
+    assert!(
+        flash.text.contains("abandoned"),
+        "it names what to do instead"
+    );
+    assert_eq!(
+        repo::recent_entries(app.db.conn(), 10).unwrap().len(),
+        3,
+        "entries intact"
+    );
+}
+
+#[test]
+fn deleting_a_project_with_no_entries_asks_and_then_deletes() {
+    let mut app = app_with_history();
+    repo::insert_project(app.db.conn(), "Never Started", None, Status::Open, None).unwrap();
+    to_screen(&mut app, 'p', Screen::Projects);
+    select_project(&mut app, "Never Started");
+    app.on_key(ch('d')).unwrap();
+    app.on_key(ch('d')).unwrap();
+    assert!(app.projects.confirming_delete);
+    app.on_key(ch('y')).unwrap();
+    assert!(
+        repo::project_id_by_title(app.db.conn(), "Never Started")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn the_projects_filter_matches_title_or_category() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    app.on_key(ch('/')).unwrap();
+    type_str(&mut app, "glow");
+    assert_eq!(app.projects.visible().len(), 1);
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    app.on_key(key(KeyCode::Esc)).unwrap();
+
+    app.on_key(ch('/')).unwrap();
+    type_str(&mut app, "sitr book");
+    assert_eq!(
+        app.projects.visible().len(),
+        2,
+        "both projects share the category"
+    );
+}
+
+#[test]
+fn the_projects_screen_renders_its_columns_and_details() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    select_project(&mut app, "Fireside 1");
+    let screen = render(&mut app, 100, 24).join("\n");
+    for expected in [
+        "Projects (2)",
+        "Fireside 1",
+        "SitR Book",
+        "open",
+        "20,253",
+        "Words per hour",
+        "Selected",
+    ] {
+        assert!(
+            screen.contains(expected),
+            "{expected:?} missing from:\n{screen}"
+        );
+    }
+    assert!(
+        screen.contains("x cycles status"),
+        "the status bar names the pass:\n{screen}"
+    );
+    // A label column exactly as wide as its longest label leaves no gap before
+    // the value, which reads as one run-together word.
+    assert!(
+        screen.contains("Words per hour  "),
+        "every details label needs a gap before its value:\n{screen}"
+    );
+}
+
+// ============================================================ categories screen
+
+#[test]
+fn the_categories_screen_shows_both_panes_with_usage_counts() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'c', Screen::Categories);
+    assert_eq!(app.categories.category_rows().len(), 1);
+    assert_eq!(app.categories.category_rows()[0].project_count, 2);
+    assert_eq!(app.categories.type_rows().len(), 1);
+    assert_eq!(app.categories.type_rows()[0].category_count, 1);
+
+    let screen = render(&mut app, 100, 20).join("\n");
+    assert!(screen.contains("Categories (1)"), "got:\n{screen}");
+    assert!(screen.contains("Types (1)"), "got:\n{screen}");
+    assert!(screen.contains("2 proj"), "got:\n{screen}");
+}
+
+#[test]
+fn tab_switches_between_the_category_and_type_panes() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'c', Screen::Categories);
+    assert_eq!(app.categories.pane, Pane::Categories);
+    app.on_key(key(KeyCode::Tab)).unwrap();
+    assert_eq!(app.categories.pane, Pane::Types);
+    app.on_key(ch('h')).unwrap();
+    assert_eq!(app.categories.pane, Pane::Categories);
+}
+
+#[test]
+fn a_type_can_be_created_in_the_types_pane() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'c', Screen::Categories);
+    app.on_key(key(KeyCode::Tab)).unwrap();
+    app.on_key(ch('o')).unwrap();
+    type_str(&mut app, "Creative NF");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+
+    assert_eq!(app.categories.type_rows().len(), 2);
+    assert!(
+        repo::type_id_by_name(app.db.conn(), "Creative NF")
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn a_category_is_created_under_a_type_and_can_be_moved_between_types() {
+    let mut app = app_with_history();
+    {
+        let conn = app.db.conn();
+        repo::ensure_type(conn, "Non-Fiction").unwrap();
+    }
+    to_screen(&mut app, 'c', Screen::Categories);
+    app.on_key(ch('o')).unwrap();
+    type_str(&mut app, "Non-Fiction Essays");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    app.on_key(key(KeyCode::Tab)).unwrap(); // to the Type field
+    let before = app
+        .categories
+        .type_name(match app.categories.edit.as_ref().unwrap() {
+            draft_tracker::tui::categories::Edit::Category(e) => e.type_id,
+            _ => None,
+        });
+    app.on_key(ch('l')).unwrap();
+    let after = app
+        .categories
+        .type_name(match app.categories.edit.as_ref().unwrap() {
+            draft_tracker::tui::categories::Edit::Category(e) => e.type_id,
+            _ => None,
+        });
+    assert_ne!(before, after, "l steps to the next type");
+
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+    let rows = repo::list_categories_with_usage(app.db.conn()).unwrap();
+    let created = rows
+        .iter()
+        .find(|r| r.category.name == "Non-Fiction Essays")
+        .unwrap();
+    assert_eq!(created.type_name, after);
+}
+
+#[test]
+fn a_category_in_use_cannot_be_deleted_from_the_screen() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'c', Screen::Categories);
+    app.on_key(ch('d')).unwrap();
+    app.on_key(ch('d')).unwrap();
+    assert!(!app.categories.confirming_delete);
+    let flash = app.flash.as_ref().unwrap();
+    assert_eq!(flash.tone, Tone::Error);
+    assert!(
+        flash.text.contains("2 projects use"),
+        "got {:?}",
+        flash.text
+    );
+    assert_eq!(
+        repo::list_categories_with_usage(app.db.conn())
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_type_with_categories_under_it_cannot_be_deleted() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'c', Screen::Categories);
+    app.on_key(key(KeyCode::Tab)).unwrap();
+    app.on_key(ch('d')).unwrap();
+    app.on_key(ch('d')).unwrap();
+    assert!(!app.categories.confirming_delete);
+    assert!(
+        app.flash
+            .as_ref()
+            .unwrap()
+            .text
+            .contains("1 categories use")
+    );
+}
+
+#[test]
+fn an_unused_category_can_be_deleted_after_confirming() {
+    let mut app = app_with_history();
+    {
+        let conn = app.db.conn();
+        let type_id = repo::type_id_by_name(conn, "Fiction").unwrap().unwrap();
+        repo::insert_category(conn, "Unused", type_id, None).unwrap();
+    }
+    to_screen(&mut app, 'c', Screen::Categories);
+    for _ in 0..app.categories.category_rows().len() {
+        if app.categories.selected_category().unwrap().category.name == "Unused" {
+            break;
+        }
+        app.on_key(ch('j')).unwrap();
+    }
+    app.on_key(ch('d')).unwrap();
+    app.on_key(ch('d')).unwrap();
+    assert!(app.categories.confirming_delete);
+    app.on_key(ch('y')).unwrap();
+    assert!(
+        repo::category_id_by_name(app.db.conn(), "Unused")
+            .unwrap()
+            .is_none(),
+        "the unused category went"
+    );
+}
+
+#[test]
+fn renaming_a_category_shows_up_on_the_projects_screen() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'c', Screen::Categories);
+    app.on_key(ch('i')).unwrap();
+    app.on_key(ch('i')).unwrap();
+    for _ in 0.."SitR Book".len() {
+        app.on_key(key(KeyCode::Backspace)).unwrap();
+    }
+    type_str(&mut app, "SitR Novel");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+
+    to_screen(&mut app, 'p', Screen::Projects);
+    assert!(
+        app.projects
+            .visible()
+            .iter()
+            .all(|r| r.category_name.as_deref() == Some("SitR Novel")),
+        "the projects screen must not be showing a stale category name"
+    );
+}
+
+#[test]
+fn leaving_the_categories_screen_discards_an_open_edit() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'c', Screen::Categories);
+    app.on_key(ch('i')).unwrap();
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "zz");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    to_screen(&mut app, 'e', Screen::Entry);
+    assert!(app.categories.edit.is_none());
+    assert_eq!(app.flash.as_ref().unwrap().text, "edit discarded");
+}
+
+#[test]
+fn the_help_overlay_changes_with_the_screen() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    app.on_key(ch('?')).unwrap();
+    let screen = render(&mut app, 90, 30).join("\n");
+    assert!(screen.contains("cycle status"), "got:\n{screen}");
+    assert!(
+        screen.contains("refused if it has entries"),
+        "got:\n{screen}"
+    );
+}
+
+/// Not an assertion: prints the frames so the layouts can be read by eye.
+#[test]
+fn show_the_projects_screen() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    select_project(&mut app, "Fireside 1");
+    for line in render(&mut app, 96, 20) {
+        println!("|{line}");
+    }
+}
+
+#[test]
+fn show_the_categories_screen() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'c', Screen::Categories);
+    app.on_key(ch('i')).unwrap();
+    for line in render(&mut app, 96, 18) {
+        println!("|{line}");
+    }
+}
+
+// ============================================================ stats dashboard
+
+/// Three years, two projects, one completed in 2025 and one abandoned.
+fn app_with_years() -> App {
+    let db = Db::open_in_memory().unwrap();
+    {
+        let conn = db.conn();
+        let fiction = repo::ensure_type(conn, "Fiction").unwrap();
+        let nonfic = repo::ensure_type(conn, "Non-Fiction").unwrap();
+        let book = repo::ensure_category(conn, "SitR Book", fiction).unwrap();
+        let essays = repo::ensure_category(conn, "Non-Fiction Essays", nonfic).unwrap();
+
+        let novel =
+            repo::insert_project(conn, "Trial of Mist", Some(book), Status::Completed, None)
+                .unwrap();
+        let essay =
+            repo::insert_project(conn, "Utopia", Some(essays), Status::Abandoned, None).unwrap();
+        let live =
+            repo::insert_project(conn, "Fireside 1", Some(book), Status::Open, None).unwrap();
+
+        let add = |project_id, d: (i32, u32, u32), words, hours| {
+            repo::insert_entry(
+                conn,
+                &NewEntry {
+                    entry_date: day(d.0, d.1, d.2),
+                    project_id,
+                    session_word_count: words,
+                    hours,
+                    notes: None,
+                },
+            )
+            .unwrap()
+        };
+        add(novel, (2024, 6, 1), 10_000, 10.0);
+        add(novel, (2025, 7, 10), 30_000, 20.0);
+        add(essay, (2025, 5, 2), 3_000, 2.0);
+        add(live, (2026, 1, 12), 1_800, 3.0);
+    }
+    App::new(db).unwrap()
+}
+
+fn to_stats(app: &mut App) {
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(ch('s')).unwrap();
+    assert_eq!(app.screen, Screen::Stats);
+}
+
+#[test]
+fn the_bar_helper_never_loses_a_non_zero_value_or_overflows_its_width() {
+    use draft_tracker::tui::draw::bar;
+    assert_eq!(bar(0, 100, 10), "", "nothing is nothing");
+    assert_eq!(
+        bar(100, 100, 10).chars().count(),
+        10,
+        "a full bar fills the width"
+    );
+    assert!(
+        !bar(1, 1_000_000, 10).is_empty(),
+        "a tiny value still shows something"
+    );
+    assert!(bar(50, 100, 10).chars().count() <= 10);
+    assert_eq!(bar(5, 100, 0), "", "no width, no bar");
+    assert_eq!(bar(10, 0, 10), "", "no maximum to scale against");
+    assert_eq!(bar(-5, 100, 10), "", "a negative total has no bar");
+}
+
+#[test]
+fn the_dashboard_opens_on_the_current_year() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    assert_eq!(app.stats.year, chrono::Local::now().date_naive().year());
+    assert!(app.stats.is_current_year());
+}
+
+#[test]
+fn the_lifetime_figures_cover_everything() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    assert_eq!(app.stats.lifetime.words, 44_800);
+    assert_eq!(app.stats.lifetime.hours, 35.0);
+    // Abandoned work is not completed work.
+    assert_eq!(app.stats.lifetime_completed, 1);
+}
+
+#[test]
+fn stepping_back_moves_through_the_years_that_have_entries() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    assert_eq!(app.stats.year, 2026);
+
+    app.on_key(ch('[')).unwrap();
+    assert_eq!(app.stats.year, 2025);
+    assert_eq!(app.stats.year_totals.words, 33_000);
+    assert_eq!(
+        app.stats.year_completed, 1,
+        "the novel's last entry is in 2025"
+    );
+
+    app.on_key(ch('[')).unwrap();
+    assert_eq!(app.stats.year, 2024);
+    assert_eq!(app.stats.year_totals.words, 10_000);
+    assert_eq!(
+        app.stats.year_completed, 0,
+        "its end date is 2025, not 2024"
+    );
+
+    // There is nothing before 2024, and the screen says so rather than sitting mute.
+    app.on_key(ch('[')).unwrap();
+    assert_eq!(app.stats.year, 2024);
+    assert!(app.flash.as_ref().unwrap().text.contains("earliest"));
+}
+
+#[test]
+fn stepping_forward_and_zero_return_to_the_current_year() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    app.on_key(ch('[')).unwrap();
+    app.on_key(ch('[')).unwrap();
+    assert_eq!(app.stats.year, 2024);
+    app.on_key(ch(']')).unwrap();
+    assert_eq!(app.stats.year, 2025);
+    app.on_key(ch('0')).unwrap();
+    assert_eq!(app.stats.year, 2026);
+    app.on_key(ch(']')).unwrap();
+    assert!(app.flash.as_ref().unwrap().text.contains("latest"));
+}
+
+#[test]
+fn the_year_graph_shows_only_that_years_projects_with_their_status() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    app.on_key(ch('[')).unwrap(); // 2025
+    let bars = &app.stats.year_projects;
+    let titles: Vec<&str> = bars.iter().map(|b| b.title.as_str()).collect();
+    assert_eq!(
+        titles,
+        vec!["Trial of Mist", "Utopia"],
+        "largest first, 2026 excluded"
+    );
+    assert_eq!(bars[0].status, Status::Completed);
+    assert_eq!(bars[1].status, Status::Abandoned);
+}
+
+#[test]
+fn year_over_year_covers_every_year_with_entries() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    assert_eq!(
+        app.stats.by_year,
+        vec![(2024, 10_000), (2025, 33_000), (2026, 1_800)]
+    );
+}
+
+#[test]
+fn the_category_shares_add_up_to_the_whole_year() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    app.on_key(ch('[')).unwrap(); // 2025
+    let shares = app.stats.category_shares();
+    let total: f64 = shares.iter().map(|(_, share, _)| share).sum();
+    assert!(
+        (total - 1.0).abs() < 1e-9,
+        "shares must sum to 1, got {total}"
+    );
+    let book = shares
+        .iter()
+        .find(|(name, _, _)| name == "SitR Book")
+        .unwrap();
+    assert!((book.1 - 30_000.0 / 33_000.0).abs() < 1e-9);
+}
+
+/// A revision-heavy category can net out below zero, and a negative slice of a
+/// bar means nothing.
+#[test]
+fn a_category_that_nets_out_negative_gets_no_slice_and_is_reported() {
+    let mut app = app_with_years();
+    {
+        let conn = app.db.conn();
+        let fiction = repo::type_id_by_name(conn, "Fiction").unwrap().unwrap();
+        let cuts = repo::ensure_category(conn, "Revision", fiction).unwrap();
+        let project =
+            repo::insert_project(conn, "Big Cut", Some(cuts), Status::Open, None).unwrap();
+        repo::insert_entry(
+            conn,
+            &NewEntry {
+                entry_date: day(2026, 2, 1),
+                project_id: project,
+                session_word_count: -500,
+                hours: 1.0,
+                notes: None,
+            },
+        )
+        .unwrap();
+    }
+    to_stats(&mut app);
+    app.stats.reload(&app.db).unwrap();
+
+    let shares = app.stats.category_shares();
+    assert!(
+        shares.iter().all(|(name, _, _)| name != "Revision"),
+        "a negative category has no slice: {shares:?}"
+    );
+    let total: f64 = shares.iter().map(|(_, share, _)| share).sum();
+    assert!(
+        (total - 1.0).abs() < 1e-9,
+        "the remaining shares still sum to 1"
+    );
+
+    let ignored = app.stats.categories_without_a_share();
+    assert_eq!(ignored.len(), 1);
+    assert_eq!(ignored[0].category, "Revision");
+
+    let screen = render(&mut app, 100, 26).join("\n");
+    assert!(screen.contains("no share: Revision"), "got:\n{screen}");
+}
+
+#[test]
+fn an_entry_added_on_the_form_shows_up_on_the_dashboard() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    let before = app.stats.lifetime.words;
+
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(ch('e')).unwrap();
+    select_title(&mut app, "Fireside 1");
+    focus(&mut app, Field::Hours);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "1");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    focus(&mut app, Field::ProjectWords);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "2300");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+
+    to_stats(&mut app);
+    assert_eq!(app.stats.lifetime.words, before + 500);
+}
+
+#[test]
+fn a_status_change_moves_the_completed_count() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    assert_eq!(app.stats.lifetime_completed, 1);
+
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(ch('p')).unwrap();
+    select_project(&mut app, "Fireside 1");
+    app.on_key(ch('x')).unwrap(); // open -> completed
+    to_stats(&mut app);
+    assert_eq!(app.stats.lifetime_completed, 2);
+}
+
+#[test]
+fn the_dashboard_renders_every_section() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    let screen = render(&mut app, 100, 30).join("\n");
+    for expected in [
+        "Lifetime",
+        "2026 (this year)",
+        "Words",
+        "Hours",
+        "Completed",
+        "Words/Hour",
+        "2026 projects",
+        "Year over year",
+        "2026 by category",
+        "44,800",
+    ] {
+        assert!(
+            screen.contains(expected),
+            "{expected:?} missing from:\n{screen}"
+        );
+    }
+}
+
+#[test]
+fn the_category_bar_fills_its_width_exactly() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    app.on_key(ch('[')).unwrap(); // 2025 has two categories
+    let width = 100u16;
+    let lines = render(&mut app, width, 30);
+    // The category bar is the only row whose entire content is solid blocks:
+    // the project and year graphs carry a label and a number too.
+    let bar_line = lines
+        .iter()
+        .find(|line| {
+            let inner = line
+                .trim_start_matches('\u{2502}')
+                .trim_end_matches('\u{2502}');
+            !inner.is_empty() && inner.chars().all(|c| c == '\u{2588}')
+        })
+        .expect("a segmented bar was drawn");
+    let blocks = bar_line.chars().filter(|c| *c == '\u{2588}').count();
+    assert_eq!(
+        blocks,
+        width as usize - 2,
+        "largest-remainder sharing must leave no gap: {bar_line:?}"
+    );
+}
+
+/// Not an assertion: prints the dashboard so the layout can be read by eye.
+#[test]
+fn show_the_stats_dashboard() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    app.on_key(ch('[')).unwrap();
+    for line in render(&mut app, 92, 26) {
+        println!("|{line}");
+    }
+}
+
+/// Runs only where the author's own (gitignored) journals are present: the real
+/// test of the dashboard layout is 78 projects and 10 categories, not a fixture.
+#[test]
+fn the_dashboard_copes_with_the_authors_real_journals() {
+    let dir = std::path::Path::new("historic_trackers");
+    if !dir.join("Writing Journal 2024.ods").exists() {
+        eprintln!("skipping: {} not present", dir.display());
+        return;
+    }
+    let mut db = Db::open_in_memory().unwrap();
+    draft_tracker::import::run(&mut db, dir, draft_tracker::import::Existing::Refuse).unwrap();
+    let mut app = App::new(db).unwrap();
+    to_stats(&mut app);
+
+    assert_eq!(app.stats.lifetime.words, 466_665);
+    assert_eq!(app.stats.lifetime.hours, 593.50);
+    assert_eq!(app.stats.lifetime_completed, 68);
+    assert_eq!(app.stats.years(), [2023, 2024, 2025, 2026]);
+
+    // 2024 has 46 projects: more than fit, so the graph must say what it cut
+    // rather than quietly showing a partial picture.
+    app.on_key(ch('[')).unwrap();
+    app.on_key(ch('[')).unwrap();
+    assert_eq!(app.stats.year, 2024);
+    assert_eq!(app.stats.year_projects.len(), 46);
+    let screen = render(&mut app, 100, 30).join("\n");
+    assert!(screen.contains("2024 projects (46)"), "got:\n{screen}");
+    assert!(
+        screen.contains("... and"),
+        "a truncated graph must say so:\n{screen}"
+    );
+
+    let shares = app.stats.category_shares();
+    let total: f64 = shares.iter().map(|(_, s, _)| s).sum();
+    assert!((total - 1.0).abs() < 1e-9, "shares sum to {total}");
+
+    // Every category must appear in the legend in full. A legend that silently
+    // drops its last entries is worse than one that takes an extra line.
+    app.on_key(ch(']')).unwrap(); // 2025, six categories
+    let screen = render(&mut app, 104, 30).join("\n");
+    for (name, _, _) in app.stats.category_shares() {
+        assert!(
+            screen.contains(&name),
+            "{name:?} missing from the legend:\n{screen}"
+        );
+    }
+}
+
+#[test]
+fn show_the_real_dashboard() {
+    let dir = std::path::Path::new("historic_trackers");
+    if !dir.join("Writing Journal 2024.ods").exists() {
+        return;
+    }
+    let mut db = Db::open_in_memory().unwrap();
+    draft_tracker::import::run(&mut db, dir, draft_tracker::import::Existing::Refuse).unwrap();
+    let mut app = App::new(db).unwrap();
+    to_stats(&mut app);
+    app.on_key(ch('[')).unwrap(); // 2025, the busiest full year
+    for line in render(&mut app, 104, 28) {
+        println!("|{line}");
+    }
+}

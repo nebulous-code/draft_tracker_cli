@@ -6,6 +6,8 @@
 
 pub mod config;
 pub mod db;
+pub mod import;
+pub mod tui;
 
 /// The shortest session the application will record, in hours.
 ///

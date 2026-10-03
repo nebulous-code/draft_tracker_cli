@@ -31,6 +31,21 @@ pub enum DbError {
 
     #[error("no project with id {0}")]
     NoSuchProject(i64),
+
+    #[error(
+        "{title:?} has {entries} entries; deleting it would destroy them. \
+         Mark it abandoned instead, or delete its entries first."
+    )]
+    ProjectHasEntries { title: String, entries: i64 },
+
+    #[error("{name:?} is used by {projects} project(s); move them first")]
+    CategoryInUse { name: String, projects: i64 },
+
+    #[error("{name:?} is used by {categories} category(ies); move them first")]
+    TypeInUse { name: String, categories: i64 },
+
+    #[error("{0:?} already exists")]
+    NameTaken(String),
 }
 
 /// An open database, migrated to the version this build expects.
