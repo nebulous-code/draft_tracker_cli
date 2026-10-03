@@ -75,7 +75,7 @@ fn select_title(app: &mut App, title: &str) {
         if app.form.selected_project().map(|c| c.title.as_str()) == Some(title) {
             return;
         }
-        app.on_key(ch('j')).unwrap();
+        app.on_key(ch('l')).unwrap();
     }
     panic!("{title} not in the picker");
 }
@@ -128,24 +128,72 @@ fn the_filter_narrows_the_picker_and_escape_clears_it() {
     assert_eq!(app.form.visible().len(), 2);
 }
 
+/// j and k walk the form like Tab. Reaching past the focused field to move the
+/// project list was the first thing that went wrong in real use.
 #[test]
-fn j_and_k_wrap_and_gg_and_capital_g_jump() {
+fn j_and_k_walk_the_fields_and_never_touch_the_project_list() {
+    let mut app = app_with_projects();
+    app.form.field = Field::Date;
+    app.on_key(ch('j')).unwrap();
+    assert_eq!(app.form.field, Field::Project);
+    app.on_key(ch('j')).unwrap();
+    assert_eq!(app.form.field, Field::Hours);
+    app.on_key(ch('k')).unwrap();
+    assert_eq!(app.form.field, Field::Project);
+
+    // Standing on Hours, j and k must not move the project underneath.
+    focus(&mut app, Field::Hours);
+    let before = app.form.selected_project().map(|c| c.title.clone());
+    app.on_key(ch('j')).unwrap();
+    app.on_key(ch('k')).unwrap();
+    assert_eq!(app.form.selected_project().map(|c| c.title.clone()), before);
+}
+
+#[test]
+fn h_and_l_step_the_project_and_gg_and_capital_g_jump() {
     let mut app = app_with_projects();
     focus(&mut app, Field::Project);
     assert_eq!(app.form.selected_index(), 0);
-    app.on_key(ch('k')).unwrap();
+    app.on_key(ch('h')).unwrap();
     assert_eq!(
         app.form.selected_index(),
         1,
-        "k from the top wraps to the bottom"
+        "h from the top wraps to the bottom"
     );
-    app.on_key(ch('j')).unwrap();
+    app.on_key(ch('l')).unwrap();
     assert_eq!(app.form.selected_index(), 0);
     app.on_key(ch('G')).unwrap();
     assert_eq!(app.form.selected_index(), 1);
     app.on_key(ch('g')).unwrap();
     app.on_key(ch('g')).unwrap();
     assert_eq!(app.form.selected_index(), 0);
+}
+
+#[test]
+fn stepping_the_project_from_another_field_says_where_the_keys_apply() {
+    let mut app = app_with_projects();
+    focus(&mut app, Field::Hours);
+    app.on_key(ch('l')).unwrap();
+    let flash = app.flash.as_ref().expect("a reason was shown");
+    assert!(
+        flash.text.contains("h and l step the project"),
+        "got {:?}",
+        flash.text
+    );
+}
+
+#[test]
+fn the_project_field_is_reached_by_tab_and_entered_with_i() {
+    let mut app = app_with_projects();
+    app.form.field = Field::Date;
+    app.on_key(key(KeyCode::Tab)).unwrap();
+    assert_eq!(app.form.field, Field::Project);
+    // i on a choice field means "narrow it", which is the useful analogue of
+    // typing when there are dozens of projects.
+    app.on_key(ch('i')).unwrap();
+    assert_eq!(app.form.mode, Mode::Filter);
+    type_str(&mut app, "fire");
+    assert_eq!(app.form.selected_project().unwrap().title, "Fireside 1");
 }
 
 // ------------------------------------------------------------ fields
@@ -602,6 +650,7 @@ fn show_the_first_entry_form() {
 fn show_the_entry_form() {
     let mut app = app_with_projects();
     select_title(&mut app, "Fireside 1");
+    let _ = &app;
     focus(&mut app, Field::Hours);
     app.on_key(ch('i')).unwrap();
     type_str(&mut app, "1");
@@ -610,6 +659,7 @@ fn show_the_entry_form() {
     app.on_key(ch('i')).unwrap();
     type_str(&mut app, "15682");
     app.on_key(key(KeyCode::Esc)).unwrap();
+    focus(&mut app, Field::Project);
     for line in render(&mut app, 86, 20) {
         println!("|{line}");
     }
@@ -1100,6 +1150,124 @@ fn the_projects_screen_shows_the_derived_figures() {
     assert_eq!(row.category_name.as_deref(), Some("SitR Book"));
 }
 
+/// The projects screen opens on the open projects, because a writing life
+/// accumulates finished work and the few still going are what matters.
+#[test]
+fn the_projects_screen_shows_only_open_projects_by_default() {
+    let mut app = app_with_history();
+    {
+        let conn = app.db.conn();
+        repo::insert_project(conn, "Shipped", None, Status::Completed, None).unwrap();
+        repo::insert_project(conn, "Dropped", None, Status::Abandoned, None).unwrap();
+    }
+    to_screen(&mut app, 'p', Screen::Projects);
+    assert!(!app.projects.show_all());
+    let titles: Vec<&str> = app
+        .projects
+        .visible()
+        .iter()
+        .map(|r| r.project.title.as_str())
+        .collect();
+    assert_eq!(titles, vec!["Fireside 1", "Glowstones"]);
+    assert_eq!(app.projects.total(), 4);
+
+    app.on_key(ch('A')).unwrap();
+    assert!(app.projects.show_all());
+    assert_eq!(app.projects.visible().len(), 4);
+    assert!(app.flash.as_ref().unwrap().text.contains("all projects"));
+
+    app.on_key(ch('A')).unwrap();
+    assert_eq!(app.projects.visible().len(), 2);
+}
+
+#[test]
+fn the_title_says_which_view_so_a_short_list_is_not_mistaken_for_missing_data() {
+    let mut app = app_with_history();
+    {
+        let conn = app.db.conn();
+        repo::insert_project(conn, "Shipped", None, Status::Completed, None).unwrap();
+    }
+    to_screen(&mut app, 'p', Screen::Projects);
+    let screen = render(&mut app, 100, 24).join("\n");
+    assert!(screen.contains("Projects (2 open of 3)"), "got:\n{screen}");
+    app.on_key(ch('A')).unwrap();
+    let screen = render(&mut app, 100, 24).join("\n");
+    assert!(screen.contains("Projects (all 3)"), "got:\n{screen}");
+}
+
+/// Marking a project completed in the open-only view would otherwise make it
+/// vanish under the cursor, hiding what the keystroke did and stopping the cycle
+/// halfway.
+#[test]
+fn a_project_stays_in_view_while_its_status_is_being_cycled() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    select_project(&mut app, "Fireside 1");
+
+    app.on_key(ch('x')).unwrap();
+    assert_eq!(
+        app.projects
+            .selected_row()
+            .map(|r| r.project.title.as_str()),
+        Some("Fireside 1"),
+        "the row the cursor is on must not disappear mid-cycle"
+    );
+    assert_eq!(
+        app.projects.selected_row().unwrap().project.status,
+        Status::Completed
+    );
+
+    // And the cycle can be carried on to abandoned.
+    app.on_key(ch('x')).unwrap();
+    assert_eq!(
+        app.projects.selected_row().unwrap().project.status,
+        Status::Abandoned
+    );
+    app.on_key(ch('x')).unwrap();
+    assert_eq!(
+        app.projects.selected_row().unwrap().project.status,
+        Status::Open
+    );
+}
+
+#[test]
+fn a_closed_project_leaves_the_open_view_once_the_cursor_moves_on() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    select_project(&mut app, "Fireside 1");
+    app.on_key(ch('x')).unwrap(); // completed, held in view
+    assert_eq!(app.projects.visible().len(), 2);
+
+    app.on_key(ch('j')).unwrap();
+    assert_eq!(
+        app.projects
+            .selected_row()
+            .map(|r| r.project.title.as_str()),
+        Some("Glowstones"),
+        "the cursor lands where it was sent, not where the shrinking list moved it"
+    );
+    assert_eq!(
+        app.projects.visible().len(),
+        1,
+        "the completed project has gone"
+    );
+    assert_eq!(app.projects.pinned(), None);
+}
+
+#[test]
+fn an_empty_open_view_points_at_the_key_that_widens_it() {
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    for title in ["Fireside 1", "Glowstones"] {
+        select_project(&mut app, title);
+        app.on_key(ch('x')).unwrap();
+        app.on_key(ch('G')).unwrap();
+    }
+    let screen = render(&mut app, 100, 24).join("\n");
+    assert!(screen.contains("No open projects"), "got:\n{screen}");
+    assert!(screen.contains("Press A"), "got:\n{screen}");
+}
+
 #[test]
 fn x_cycles_a_projects_status_without_opening_a_panel() {
     let mut app = app_with_history();
@@ -1330,7 +1498,7 @@ fn the_projects_screen_renders_its_columns_and_details() {
     select_project(&mut app, "Fireside 1");
     let screen = render(&mut app, 100, 24).join("\n");
     for expected in [
-        "Projects (2)",
+        "Projects (2 open of 2)",
         "Fireside 1",
         "SitR Book",
         "open",
@@ -1646,7 +1814,10 @@ fn the_bar_helper_never_loses_a_non_zero_value_or_overflows_its_width() {
 fn the_dashboard_opens_on_the_current_year() {
     let mut app = app_with_years();
     to_stats(&mut app);
-    assert_eq!(app.stats.year, chrono::Local::now().date_naive().year());
+    assert_eq!(
+        app.stats.selected_year(),
+        Some(chrono::Local::now().date_naive().year())
+    );
     assert!(app.stats.is_current_year());
 }
 
@@ -1664,27 +1835,27 @@ fn the_lifetime_figures_cover_everything() {
 fn stepping_back_moves_through_the_years_that_have_entries() {
     let mut app = app_with_years();
     to_stats(&mut app);
-    assert_eq!(app.stats.year, 2026);
+    assert_eq!(app.stats.selected_year(), Some(2026));
 
-    app.on_key(ch('[')).unwrap();
-    assert_eq!(app.stats.year, 2025);
-    assert_eq!(app.stats.year_totals.words, 33_000);
+    app.on_key(ch('k')).unwrap();
+    assert_eq!(app.stats.selected_year(), Some(2025));
+    assert_eq!(app.stats.selected.words, 33_000);
     assert_eq!(
-        app.stats.year_completed, 1,
+        app.stats.selected_completed, 1,
         "the novel's last entry is in 2025"
     );
 
-    app.on_key(ch('[')).unwrap();
-    assert_eq!(app.stats.year, 2024);
-    assert_eq!(app.stats.year_totals.words, 10_000);
+    app.on_key(ch('k')).unwrap();
+    assert_eq!(app.stats.selected_year(), Some(2024));
+    assert_eq!(app.stats.selected.words, 10_000);
     assert_eq!(
-        app.stats.year_completed, 0,
+        app.stats.selected_completed, 0,
         "its end date is 2025, not 2024"
     );
 
     // There is nothing before 2024, and the screen says so rather than sitting mute.
-    app.on_key(ch('[')).unwrap();
-    assert_eq!(app.stats.year, 2024);
+    app.on_key(ch('k')).unwrap();
+    assert_eq!(app.stats.selected_year(), Some(2024));
     assert!(app.flash.as_ref().unwrap().text.contains("earliest"));
 }
 
@@ -1692,23 +1863,127 @@ fn stepping_back_moves_through_the_years_that_have_entries() {
 fn stepping_forward_and_zero_return_to_the_current_year() {
     let mut app = app_with_years();
     to_stats(&mut app);
-    app.on_key(ch('[')).unwrap();
-    app.on_key(ch('[')).unwrap();
-    assert_eq!(app.stats.year, 2024);
-    app.on_key(ch(']')).unwrap();
-    assert_eq!(app.stats.year, 2025);
+    app.on_key(ch('k')).unwrap();
+    app.on_key(ch('k')).unwrap();
+    assert_eq!(app.stats.selected_year(), Some(2024));
+    app.on_key(ch('j')).unwrap();
+    assert_eq!(app.stats.selected_year(), Some(2025));
     app.on_key(ch('0')).unwrap();
-    assert_eq!(app.stats.year, 2026);
-    app.on_key(ch(']')).unwrap();
-    assert!(app.flash.as_ref().unwrap().text.contains("latest"));
+    assert_eq!(app.stats.selected_year(), Some(2026));
+}
+
+/// All time sits at the end of the sequence of years, so stepping forward from
+/// the newest year arrives there rather than stopping dead.
+#[test]
+fn stepping_past_the_newest_year_reaches_all_time() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    assert_eq!(app.stats.selected_year(), Some(2026));
+    app.on_key(ch('j')).unwrap();
+    assert!(app.stats.is_lifetime());
+    assert_eq!(app.stats.selected_year(), None);
+
+    app.on_key(ch('j')).unwrap();
+    assert!(app.stats.is_lifetime(), "there is nothing past all time");
+    assert!(app.flash.as_ref().unwrap().text.contains("end"));
+
+    app.on_key(ch('k')).unwrap();
+    assert_eq!(
+        app.stats.selected_year(),
+        Some(2026),
+        "stepping back leaves all time"
+    );
+}
+
+#[test]
+fn dollar_jumps_to_all_time_and_zero_comes_back() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    app.on_key(ch('$')).unwrap();
+    assert!(app.stats.is_lifetime());
+    // The lower half now covers every project and every category.
+    assert_eq!(app.stats.selected.words, app.stats.lifetime.words);
+    assert_eq!(
+        app.stats.selected_projects.len(),
+        3,
+        "all three, not just 2026's one"
+    );
+
+    app.on_key(ch('0')).unwrap();
+    assert_eq!(app.stats.selected_year(), Some(2026));
+    assert_eq!(app.stats.selected_projects.len(), 1);
+}
+
+#[test]
+fn all_time_shows_one_set_of_figures_rather_than_the_same_four_twice() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    let by_year = render(&mut app, 100, 30).join("\n");
+    assert!(by_year.contains("Lifetime"), "got:\n{by_year}");
+    assert!(by_year.contains("2026 (this year)"), "got:\n{by_year}");
+
+    app.on_key(ch('$')).unwrap();
+    let all_time = render(&mut app, 100, 30).join("\n");
+    assert!(all_time.contains("All time"), "got:\n{all_time}");
+    assert!(
+        !all_time.contains("(this year)"),
+        "no year panel while showing all time:\n{all_time}"
+    );
+    assert_eq!(
+        all_time.matches("Words/Hour").count(),
+        1,
+        "the same four numbers must not appear twice:\n{all_time}"
+    );
+}
+
+/// With every project a writer has started on one list, the graph has to scroll.
+#[test]
+fn h_and_l_scroll_the_project_graph() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    app.on_key(ch('$')).unwrap();
+    // Draw first, so scrolling knows how many rows fit.
+    let _ = render(&mut app, 100, 14);
+    assert_eq!(app.stats.project_offset(), 0);
+
+    app.on_key(ch('l')).unwrap();
+    assert_eq!(app.stats.project_offset(), 1, "l scrolls down the list");
+    app.on_key(ch('h')).unwrap();
+    assert_eq!(app.stats.project_offset(), 0);
+    app.on_key(ch('h')).unwrap();
+    assert_eq!(app.stats.project_offset(), 0, "already at the top");
+
+    app.on_key(ch('G')).unwrap();
+    let at_end = app.stats.project_offset();
+    app.on_key(ch('l')).unwrap();
+    assert_eq!(
+        app.stats.project_offset(),
+        at_end,
+        "G goes as far as there is to go"
+    );
+    app.on_key(ch('g')).unwrap();
+    app.on_key(ch('g')).unwrap();
+    assert_eq!(app.stats.project_offset(), 0, "gg returns to the top");
+}
+
+#[test]
+fn changing_scope_returns_the_project_graph_to_the_top() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    app.on_key(ch('$')).unwrap();
+    let _ = render(&mut app, 100, 14);
+    app.on_key(ch('l')).unwrap();
+    assert_eq!(app.stats.project_offset(), 1);
+    app.on_key(ch('k')).unwrap();
+    assert_eq!(app.stats.project_offset(), 0, "a new scope is a new list");
 }
 
 #[test]
 fn the_year_graph_shows_only_that_years_projects_with_their_status() {
     let mut app = app_with_years();
     to_stats(&mut app);
-    app.on_key(ch('[')).unwrap(); // 2025
-    let bars = &app.stats.year_projects;
+    app.on_key(ch('k')).unwrap(); // 2025
+    let bars = &app.stats.selected_projects;
     let titles: Vec<&str> = bars.iter().map(|b| b.title.as_str()).collect();
     assert_eq!(
         titles,
@@ -1733,7 +2008,7 @@ fn year_over_year_covers_every_year_with_entries() {
 fn the_category_shares_add_up_to_the_whole_year() {
     let mut app = app_with_years();
     to_stats(&mut app);
-    app.on_key(ch('[')).unwrap(); // 2025
+    app.on_key(ch('k')).unwrap(); // 2025
     let shares = app.stats.category_shares();
     let total: f64 = shares.iter().map(|(_, share, _)| share).sum();
     assert!(
@@ -1858,7 +2133,7 @@ fn the_dashboard_renders_every_section() {
 fn the_category_bar_fills_its_width_exactly() {
     let mut app = app_with_years();
     to_stats(&mut app);
-    app.on_key(ch('[')).unwrap(); // 2025 has two categories
+    app.on_key(ch('k')).unwrap(); // 2025 has two categories
     let width = 100u16;
     let lines = render(&mut app, width, 30);
     // The category bar is the only row whose entire content is solid blocks:
@@ -1885,7 +2160,7 @@ fn the_category_bar_fills_its_width_exactly() {
 fn show_the_stats_dashboard() {
     let mut app = app_with_years();
     to_stats(&mut app);
-    app.on_key(ch('[')).unwrap();
+    app.on_key(ch('k')).unwrap();
     for line in render(&mut app, 92, 26) {
         println!("|{line}");
     }
@@ -1912,16 +2187,16 @@ fn the_dashboard_copes_with_the_authors_real_journals() {
 
     // 2024 has 46 projects: more than fit, so the graph must say what it cut
     // rather than quietly showing a partial picture.
-    app.on_key(ch('[')).unwrap();
-    app.on_key(ch('[')).unwrap();
-    assert_eq!(app.stats.year, 2024);
-    assert_eq!(app.stats.year_projects.len(), 46);
+    app.on_key(ch('k')).unwrap();
+    app.on_key(ch('k')).unwrap();
+    assert_eq!(app.stats.selected_year(), Some(2024));
+    assert_eq!(app.stats.selected_projects.len(), 46);
+    let _ = render(&mut app, 100, 30);
     let screen = render(&mut app, 100, 30).join("\n");
-    assert!(screen.contains("2024 projects (46)"), "got:\n{screen}");
-    assert!(
-        screen.contains("... and"),
-        "a truncated graph must say so:\n{screen}"
-    );
+    // The title carries the window, so a scrolled graph never looks like the
+    // whole list.
+    assert!(screen.contains("2024 projects (1"), "got:\n{screen}");
+    assert!(screen.contains("of 46)"), "got:\n{screen}");
 
     let shares = app.stats.category_shares();
     let total: f64 = shares.iter().map(|(_, s, _)| s).sum();
@@ -1929,7 +2204,7 @@ fn the_dashboard_copes_with_the_authors_real_journals() {
 
     // Every category must appear in the legend in full. A legend that silently
     // drops its last entries is worse than one that takes an extra line.
-    app.on_key(ch(']')).unwrap(); // 2025, six categories
+    app.on_key(ch('j')).unwrap(); // 2025, six categories
     let screen = render(&mut app, 104, 30).join("\n");
     for (name, _, _) in app.stats.category_shares() {
         assert!(
@@ -1949,8 +2224,292 @@ fn show_the_real_dashboard() {
     draft_tracker::import::run(&mut db, dir, draft_tracker::import::Existing::Refuse).unwrap();
     let mut app = App::new(db).unwrap();
     to_stats(&mut app);
-    app.on_key(ch('[')).unwrap(); // 2025, the busiest full year
+    app.on_key(ch('k')).unwrap(); // 2025, the busiest full year
     for line in render(&mut app, 104, 28) {
         println!("|{line}");
+    }
+}
+
+#[test]
+fn show_the_real_projects_screen() {
+    let dir = std::path::Path::new("historic_trackers");
+    if !dir.join("Writing Journal 2024.ods").exists() {
+        return;
+    }
+    let mut db = Db::open_in_memory().unwrap();
+    draft_tracker::import::run(&mut db, dir, draft_tracker::import::Existing::Refuse).unwrap();
+    let mut app = App::new(db).unwrap();
+    to_screen(&mut app, 'p', Screen::Projects);
+    for line in render(&mut app, 96, 20) {
+        println!("|{line}");
+    }
+}
+
+// ============================================================ moving an entry
+
+fn focus_edit_field(app: &mut App, field: EditField) {
+    for _ in 0..EditField::ORDER.len() {
+        if app.history.edit.as_ref().unwrap().field == field {
+            return;
+        }
+        app.on_key(key(KeyCode::Tab)).unwrap();
+    }
+    panic!("could not focus {field:?}");
+}
+
+#[test]
+fn j_and_k_walk_the_fields_of_every_edit_panel() {
+    // History.
+    let mut app = app_with_history();
+    to_history(&mut app);
+    app.on_key(ch('i')).unwrap();
+    let first = app.history.edit.as_ref().unwrap().field;
+    app.on_key(ch('j')).unwrap();
+    assert_ne!(app.history.edit.as_ref().unwrap().field, first);
+    app.on_key(ch('k')).unwrap();
+    assert_eq!(app.history.edit.as_ref().unwrap().field, first);
+
+    // Projects.
+    to_screen(&mut app, 'p', Screen::Projects);
+    app.on_key(ch('i')).unwrap();
+    let first = app.projects.edit.as_ref().unwrap().field;
+    app.on_key(ch('j')).unwrap();
+    assert_ne!(app.projects.edit.as_ref().unwrap().field, first);
+    app.on_key(ch('k')).unwrap();
+    assert_eq!(app.projects.edit.as_ref().unwrap().field, first);
+
+    // Categories.
+    to_screen(&mut app, 'c', Screen::Categories);
+    app.on_key(ch('i')).unwrap();
+    let before = render(&mut app, 100, 24).join("\n");
+    app.on_key(ch('j')).unwrap();
+    let after = render(&mut app, 100, 24).join("\n");
+    assert_ne!(
+        before, after,
+        "j must move the cursor in the category panel too"
+    );
+}
+
+#[test]
+fn an_entry_can_be_moved_to_another_project() {
+    let mut app = app_with_history();
+    let (fireside, glowstones) = {
+        let conn = app.db.conn();
+        (
+            repo::project_id_by_title(conn, "Fireside 1")
+                .unwrap()
+                .unwrap(),
+            repo::project_id_by_title(conn, "Glowstones")
+                .unwrap()
+                .unwrap(),
+        )
+    };
+    assert_eq!(
+        repo::project_logged_total(app.db.conn(), fireside).unwrap(),
+        20_253
+    );
+    assert_eq!(
+        repo::project_logged_total(app.db.conn(), glowstones).unwrap(),
+        880
+    );
+
+    to_history(&mut app);
+    select_entry_with_words(&mut app, 253);
+    app.on_key(ch('i')).unwrap();
+    focus_edit_field(&mut app, EditField::Project);
+    assert_eq!(
+        app.history.edit.as_ref().unwrap().project_title,
+        "Fireside 1"
+    );
+
+    // h and l step it, exactly as on the entry form.
+    app.on_key(ch('l')).unwrap();
+    assert_eq!(
+        app.history.edit.as_ref().unwrap().project_title,
+        "Glowstones"
+    );
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+
+    assert_eq!(app.flash.as_ref().unwrap().tone, Tone::Success);
+    // The words move with the entry: both totals change.
+    assert_eq!(
+        repo::project_logged_total(app.db.conn(), fireside).unwrap(),
+        20_000
+    );
+    assert_eq!(
+        repo::project_logged_total(app.db.conn(), glowstones).unwrap(),
+        1_133
+    );
+}
+
+#[test]
+fn the_project_picker_only_appears_while_the_project_field_is_in_hand() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    app.on_key(ch('i')).unwrap();
+
+    focus_edit_field(&mut app, EditField::Hours);
+    let without = render(&mut app, 100, 24).join("\n");
+    assert!(
+        !without.contains("Move to"),
+        "the picker must stay out of the way:\n{without}"
+    );
+
+    focus_edit_field(&mut app, EditField::Project);
+    let with = render(&mut app, 100, 24).join("\n");
+    assert!(with.contains("Move to"), "got:\n{with}");
+    assert!(
+        with.contains("Glowstones"),
+        "the other projects are listed:\n{with}"
+    );
+    assert!(
+        with.contains("Edit entry"),
+        "the fields stay visible:\n{with}"
+    );
+}
+
+#[test]
+fn the_picker_offers_closed_projects_too_because_that_is_where_a_mistake_hides() {
+    let mut app = app_with_history();
+    {
+        let conn = app.db.conn();
+        repo::insert_project(conn, "Shipped Long Ago", None, Status::Completed, None).unwrap();
+    }
+    to_history(&mut app);
+    app.on_key(ch('i')).unwrap();
+    focus_edit_field(&mut app, EditField::Project);
+    let titles: Vec<&str> = app
+        .history
+        .edit_choices()
+        .iter()
+        .map(|c| c.title.as_str())
+        .collect();
+    assert!(titles.contains(&"Shipped Long Ago"), "got {titles:?}");
+}
+
+#[test]
+fn the_picker_can_be_filtered_by_typing() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    select_entry_with_words(&mut app, 253);
+    app.on_key(ch('i')).unwrap();
+    focus_edit_field(&mut app, EditField::Project);
+    app.on_key(ch('i')).unwrap();
+    assert_eq!(app.history.edit.as_ref().unwrap().mode, Mode::Filter);
+    type_str(&mut app, "glow");
+    assert_eq!(app.history.edit_choices().len(), 1);
+    // Typing to find a project lands on it; no extra keystroke needed.
+    assert_eq!(
+        app.history.edit.as_ref().unwrap().project_title,
+        "Glowstones"
+    );
+
+    // Widening the filter leaves the found project pending rather than snapping
+    // back to where it started.
+    for _ in 0..4 {
+        app.on_key(key(KeyCode::Backspace)).unwrap();
+    }
+    assert_eq!(app.history.edit.as_ref().unwrap().filter, "");
+    assert!(app.history.edit_choices().len() > 1);
+    assert_eq!(
+        app.history.edit.as_ref().unwrap().project_title,
+        "Glowstones"
+    );
+
+    // Esc leaves filtering, and h/l then step the narrowed list.
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    assert_eq!(app.history.edit.as_ref().unwrap().mode, Mode::Normal);
+    app.on_key(ch('l')).unwrap();
+    assert_ne!(
+        app.history.edit.as_ref().unwrap().project_title,
+        "Glowstones",
+        "l steps on from wherever the filter left the cursor"
+    );
+}
+
+#[test]
+fn leaving_the_project_field_forgets_its_filter() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    app.on_key(ch('i')).unwrap();
+    focus_edit_field(&mut app, EditField::Project);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "glow");
+    assert_eq!(app.history.edit.as_ref().unwrap().filter, "glow");
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    app.on_key(key(KeyCode::Tab)).unwrap();
+    assert_eq!(
+        app.history.edit.as_ref().unwrap().filter,
+        "",
+        "a filter is a way of finding something, not a setting to carry around"
+    );
+}
+
+#[test]
+fn moving_the_project_counts_as_an_unsaved_change() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    app.on_key(ch('i')).unwrap();
+    focus_edit_field(&mut app, EditField::Project);
+    app.on_key(ch('l')).unwrap();
+    assert!(app.history.edit.as_ref().unwrap().is_changed());
+    assert_eq!(app.on_key(ch('q')).unwrap(), Flow::Continue);
+    assert!(
+        app.confirming_quit,
+        "quitting must not throw the move away silently"
+    );
+}
+
+/// Not assertions: print the frames so the layouts can be read by eye.
+#[test]
+fn show_the_entry_move_picker() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    select_entry_with_words(&mut app, 253);
+    app.on_key(ch('i')).unwrap();
+    focus_edit_field(&mut app, EditField::Project);
+    for line in render(&mut app, 96, 20) {
+        println!("|{line}");
+    }
+}
+
+#[test]
+fn show_the_all_time_dashboard() {
+    let dir = std::path::Path::new("historic_trackers");
+    if !dir.join("Writing Journal 2024.ods").exists() {
+        return;
+    }
+    let mut db = Db::open_in_memory().unwrap();
+    draft_tracker::import::run(&mut db, dir, draft_tracker::import::Existing::Refuse).unwrap();
+    let mut app = App::new(db).unwrap();
+    to_stats(&mut app);
+    app.on_key(ch('$')).unwrap();
+    for line in render(&mut app, 104, 28) {
+        println!("|{line}");
+    }
+}
+
+/// The status bar is the one line that must never be cut off: it is where the
+/// keys are announced.
+#[test]
+fn the_status_bar_fits_on_every_screen() {
+    let mut app = app_with_years();
+    for (leader_key, expected) in [
+        ('e', Screen::Entry),
+        ('h', Screen::History),
+        ('p', Screen::Projects),
+        ('c', Screen::Categories),
+        ('s', Screen::Stats),
+    ] {
+        app.on_key(ch(' ')).unwrap();
+        app.on_key(ch(leader_key)).unwrap();
+        assert_eq!(app.screen, expected);
+        let lines = render(&mut app, 90, 30);
+        let status = lines.last().expect("a status bar");
+        assert!(
+            status.ends_with("q quit"),
+            "{expected:?} status bar is cut off at 90 columns: {status:?}"
+        );
     }
 }

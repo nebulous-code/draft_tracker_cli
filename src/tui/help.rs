@@ -28,13 +28,13 @@ const GLOBAL: Section = Section {
 const ENTRY: Section = Section {
     title: "Entry form",
     bindings: &[
-        ("Tab / Shift-Tab", "next / previous field"),
-        ("j / k", "move through the project list"),
+        ("Tab / j / k", "next and previous field"),
+        ("h / l", "step the project"),
         ("gg / G", "first / last project"),
-        ("i or a", "start typing in a field"),
+        ("i or a", "start typing, or filter on the project field"),
         ("Esc", "stop typing"),
         ("/", "filter projects"),
-        ("A", "show completed and abandoned projects too"),
+        ("A", "include completed and abandoned projects"),
         ("<leader><CR>", "submit the entry"),
     ],
 };
@@ -48,6 +48,8 @@ const HISTORY: Section = Section {
         ("Esc", "clear the filter"),
         ("i or <CR>", "edit the selected entry"),
         ("dd", "delete it, after confirming"),
+        ("Tab / j / k", "next and previous field while editing"),
+        ("h / l", "move the entry to another project"),
         ("<leader><CR>", "save the open edit"),
     ],
 };
@@ -58,10 +60,12 @@ const PROJECTS: Section = Section {
         ("j / k", "move through the projects"),
         ("gg / G", "first / last"),
         ("/", "filter by title or category"),
+        ("A", "show all projects, not only the open ones"),
         ("x", "cycle status: open, completed, abandoned"),
         ("i or <CR>", "edit the selected project"),
         ("o", "create a project"),
         ("dd", "delete it; refused if it has entries"),
+        ("Tab / j / k", "next and previous field while editing"),
         ("h / l", "step a choice field while editing"),
         ("<leader><CR>", "save the open edit"),
     ],
@@ -75,6 +79,7 @@ const CATEGORIES: Section = Section {
         ("i or <CR>", "edit the selected record"),
         ("o", "create one in the focused pane"),
         ("dd", "delete it; refused if anything uses it"),
+        ("Tab / j / k", "next and previous field while editing"),
         ("<leader><CR>", "save the open edit"),
     ],
 };
@@ -82,9 +87,12 @@ const CATEGORIES: Section = Section {
 const STATS: Section = Section {
     title: "Stats",
     bindings: &[
-        ("[ or h", "previous year with entries"),
-        ("] or l", "next year"),
+        ("k or [", "older year"),
+        ("j or ]", "newer year, then all time"),
         ("0", "back to this year"),
+        ("$", "all time"),
+        ("h / l", "scroll the project graph"),
+        ("gg / G", "top / end of the project graph"),
     ],
 };
 

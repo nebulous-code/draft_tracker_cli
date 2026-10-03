@@ -183,6 +183,18 @@ pub struct Projects {
     selected: usize,
     pub confirming_delete: bool,
     pending_d: bool,
+    /// Show completed and abandoned projects as well as open ones.
+    ///
+    /// Off by default: most of a writing life accumulates as finished work, and
+    /// the handful still open is what a writer is usually looking at.
+    show_all: bool,
+    /// A project held in view even though the current filter excludes it.
+    ///
+    /// Marking a project completed in the open-only view would otherwise make it
+    /// vanish under the cursor: the writer could not see what the keystroke did,
+    /// and could not press the key again to carry on to abandoned. It is held
+    /// until the cursor moves off it.
+    pinned: Option<i64>,
 }
 
 impl Projects {
@@ -196,7 +208,55 @@ impl Projects {
             selected: 0,
             confirming_delete: false,
             pending_d: false,
+            show_all: false,
+            pinned: None,
         }
+    }
+
+    /// Keep a project in view that the filter would otherwise drop.
+    pub fn pin(&mut self, id: i64) {
+        self.pinned = Some(id);
+    }
+
+    pub fn pinned(&self) -> Option<i64> {
+        self.pinned
+    }
+
+    /// Drop the pin, holding the cursor on whichever project it names.
+    ///
+    /// Taken before a move so the move lands where the writer expects: unpinning
+    /// shortens the list, which would otherwise shift every index after it.
+    fn release_pin(&mut self) {
+        if self.pinned.is_none() {
+            return;
+        }
+        let staying = self.selected_row().map(|r| r.project.id);
+        self.pinned = None;
+        self.selected = staying
+            .and_then(|id| self.visible().iter().position(|r| r.project.id == id))
+            .unwrap_or(self.selected);
+        self.clamp();
+    }
+
+    pub fn show_all(&self) -> bool {
+        self.show_all
+    }
+
+    /// How many projects exist, whatever the current view shows.
+    pub fn total(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Flip between every project and the open ones, keeping the cursor on the
+    /// same project where it survives the change.
+    pub fn toggle_show_all(&mut self) {
+        let previous = self.selected_row().map(|r| r.project.id);
+        self.show_all = !self.show_all;
+        self.pinned = None;
+        self.selected = previous
+            .and_then(|id| self.visible().iter().position(|r| r.project.id == id))
+            .unwrap_or(0);
+        self.clamp();
     }
 
     pub fn refresh(&mut self, rows: Vec<ProjectRow>, categories: Vec<CategoryRow>) {
@@ -232,6 +292,11 @@ impl Projects {
         self.rows
             .iter()
             .filter(|r| {
+                self.show_all
+                    || r.project.status == Status::Open
+                    || self.pinned == Some(r.project.id)
+            })
+            .filter(|r| {
                 needle.is_empty()
                     || r.project.title.to_lowercase().contains(&needle)
                     || r.category_name
@@ -258,23 +323,46 @@ impl Projects {
 
     pub fn select_next(&mut self) {
         let len = self.visible().len();
-        if len > 0 {
-            self.selected = (self.selected + 1) % len;
+        if len == 0 {
+            return;
         }
+        let target = self
+            .visible()
+            .get((self.selected + 1) % len)
+            .map(|r| r.project.id);
+        self.move_to(target);
     }
 
     pub fn select_previous(&mut self) {
         let len = self.visible().len();
-        if len > 0 {
-            self.selected = (self.selected + len - 1) % len;
+        if len == 0 {
+            return;
         }
+        let target = self
+            .visible()
+            .get((self.selected + len - 1) % len)
+            .map(|r| r.project.id);
+        self.move_to(target);
+    }
+
+    /// Land on `target`, then release any pin, so the row the cursor left can
+    /// fall out of view without taking the cursor with it.
+    fn move_to(&mut self, target: Option<i64>) {
+        if let Some(id) = target
+            && let Some(index) = self.visible().iter().position(|r| r.project.id == id)
+        {
+            self.selected = index;
+        }
+        self.release_pin();
     }
 
     pub fn select_first(&mut self) {
         self.selected = 0;
+        self.release_pin();
     }
 
     pub fn select_last(&mut self) {
+        self.release_pin();
         self.selected = self.visible().len().saturating_sub(1);
     }
 

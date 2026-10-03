@@ -8,7 +8,7 @@
 
 use chrono::NaiveDate;
 
-use super::entry::Mode;
+use super::entry::{Choice, Mode};
 use crate::MIN_SESSION_HOURS;
 use crate::db::models::{NewEntry, Status};
 use crate::db::repo::EntryWithProject;
@@ -16,14 +16,16 @@ use crate::db::repo::EntryWithProject;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditField {
     Date,
+    Project,
     SessionWords,
     Hours,
     Notes,
 }
 
 impl EditField {
-    pub const ORDER: [EditField; 4] = [
+    pub const ORDER: [EditField; 5] = [
         EditField::Date,
+        EditField::Project,
         EditField::SessionWords,
         EditField::Hours,
         EditField::Notes,
@@ -32,10 +34,16 @@ impl EditField {
     pub fn label(self) -> &'static str {
         match self {
             EditField::Date => "Date",
+            EditField::Project => "Project",
             EditField::SessionWords => "Session WC",
             EditField::Hours => "Hours",
             EditField::Notes => "Notes",
         }
+    }
+
+    /// Chosen from a list rather than typed.
+    pub fn is_choice(self) -> bool {
+        matches!(self, EditField::Project)
     }
 
     fn index(self) -> usize {
@@ -90,7 +98,9 @@ pub struct Edit {
     pub notes: String,
     pub field: EditField,
     pub mode: Mode,
-    original: (String, String, String, String),
+    /// Narrows the project picker while the Project field is open.
+    pub filter: String,
+    original: (String, String, String, String, i64),
 }
 
 impl Edit {
@@ -109,7 +119,8 @@ impl Edit {
             notes: notes.clone(),
             field: EditField::SessionWords,
             mode: Mode::Normal,
-            original: (date, words, hours, notes),
+            filter: String::new(),
+            original: (date, words, hours, notes, row.entry.project_id),
         }
     }
 
@@ -119,16 +130,37 @@ impl Edit {
             EditField::SessionWords => &self.session_words,
             EditField::Hours => &self.hours,
             EditField::Notes => &self.notes,
+            EditField::Project => "",
         }
     }
 
-    fn text_mut(&mut self) -> &mut String {
+    fn text_mut(&mut self) -> Option<&mut String> {
         match self.field {
-            EditField::Date => &mut self.date,
-            EditField::SessionWords => &mut self.session_words,
-            EditField::Hours => &mut self.hours,
-            EditField::Notes => &mut self.notes,
+            EditField::Date => Some(&mut self.date),
+            EditField::SessionWords => Some(&mut self.session_words),
+            EditField::Hours => Some(&mut self.hours),
+            EditField::Notes => Some(&mut self.notes),
+            EditField::Project => None,
         }
+    }
+
+    /// Typing on a choice field narrows its list; elsewhere it edits text.
+    pub fn begin_insert(&mut self) {
+        self.mode = if self.field.is_choice() {
+            Mode::Filter
+        } else {
+            Mode::Insert
+        };
+    }
+
+    /// Moving off the Project field drops its filter: it is a way of finding a
+    /// project, not a setting to carry around.
+    pub fn set_field(&mut self, field: EditField) {
+        if field != EditField::Project {
+            self.filter.clear();
+        }
+        self.field = field;
+        self.mode = Mode::Normal;
     }
 
     pub fn is_changed(&self) -> bool {
@@ -138,18 +170,33 @@ impl Edit {
                 self.session_words.clone(),
                 self.hours.clone(),
                 self.notes.clone(),
+                self.project_id,
             )
     }
 
     pub fn push_char(&mut self, c: char) {
-        if self.mode == Mode::Insert {
-            self.text_mut().push(c);
+        match self.mode {
+            Mode::Filter => self.filter.push(c),
+            Mode::Insert => {
+                if let Some(text) = self.text_mut() {
+                    text.push(c);
+                }
+            }
+            Mode::Normal => {}
         }
     }
 
     pub fn backspace(&mut self) {
-        if self.mode == Mode::Insert {
-            self.text_mut().pop();
+        match self.mode {
+            Mode::Filter => {
+                self.filter.pop();
+            }
+            Mode::Insert => {
+                if let Some(text) = self.text_mut() {
+                    text.pop();
+                }
+            }
+            Mode::Normal => {}
         }
     }
 
@@ -219,6 +266,8 @@ pub fn format_hours(hours: f64) -> String {
 
 pub struct History {
     rows: Vec<EntryWithProject>,
+    /// Every project, so an entry can be moved to one it was mis-filed away from.
+    projects: Vec<Choice>,
     pub filter: String,
     pub mode: Mode,
     pub edit: Option<Edit>,
@@ -228,9 +277,10 @@ pub struct History {
 }
 
 impl History {
-    pub fn new(rows: Vec<EntryWithProject>) -> Self {
+    pub fn new(rows: Vec<EntryWithProject>, projects: Vec<Choice>) -> Self {
         Self {
             rows,
+            projects,
             filter: String::new(),
             mode: Mode::Normal,
             edit: None,
@@ -242,9 +292,10 @@ impl History {
 
     /// Reload after a change, keeping the cursor on the same entry when it is
     /// still there. A delete leaves it on the row that took its place.
-    pub fn refresh(&mut self, rows: Vec<EntryWithProject>) {
+    pub fn refresh(&mut self, rows: Vec<EntryWithProject>, projects: Vec<Choice>) {
         let previous = self.selected_row().map(|r| r.entry.id);
         self.rows = rows;
+        self.projects = projects;
         if let Some(id) = previous
             && let Some(index) = self.visible().iter().position(|r| r.entry.id == id)
         {
@@ -322,6 +373,77 @@ impl History {
     }
 
     /// Open the edit panel over the selected entry.
+    /// Projects the edit panel's picker is offering, narrowed by its filter.
+    ///
+    /// Every project, not only the open ones: the reason to move an entry is
+    /// that it was filed somewhere wrong, and the right home may be finished.
+    pub fn edit_choices(&self) -> Vec<&Choice> {
+        let needle = self
+            .edit
+            .as_ref()
+            .map(|e| e.filter.to_lowercase())
+            .unwrap_or_default();
+        self.projects
+            .iter()
+            .filter(|c| needle.is_empty() || c.title.to_lowercase().contains(&needle))
+            .collect()
+    }
+
+    /// Step the entry's project through the picker's current list.
+    pub fn step_project(&mut self, step: i64) {
+        let ids: Vec<(i64, String)> = self
+            .edit_choices()
+            .iter()
+            .map(|c| (c.id, c.title.clone()))
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let Some(edit) = self.edit.as_mut() else {
+            return;
+        };
+        let current = ids
+            .iter()
+            .position(|(id, _)| *id == edit.project_id)
+            .unwrap_or(0) as i64;
+        let len = ids.len() as i64;
+        let next = ((current + step) % len + len) % len;
+        let (id, title) = ids[next as usize].clone();
+        edit.project_id = id;
+        edit.project_title = title;
+    }
+
+    /// Keep the pending project inside the picker's filtered list.
+    ///
+    /// Typing to find a project should land on it: without this, narrowing to a
+    /// single match would leave the old project pending and highlight nothing.
+    /// Nothing is written until the edit is saved, so following the filter costs
+    /// the writer nothing.
+    pub fn sync_project_to_filter(&mut self) {
+        let first = self.edit_choices().first().map(|c| (c.id, c.title.clone()));
+        let still_listed = self
+            .edit
+            .as_ref()
+            .is_some_and(|e| self.edit_choices().iter().any(|c| c.id == e.project_id));
+        if still_listed {
+            return;
+        }
+        if let Some((id, title)) = first
+            && let Some(edit) = self.edit.as_mut()
+        {
+            edit.project_id = id;
+            edit.project_title = title;
+        }
+    }
+
+    /// Where the picker's cursor sits, for the highlight.
+    pub fn edit_choice_index(&self) -> Option<usize> {
+        let edit = self.edit.as_ref()?;
+        self.edit_choices()
+            .iter()
+            .position(|c| c.id == edit.project_id)
+    }
+
     pub fn begin_edit(&mut self) -> bool {
         match self.selected_row() {
             Some(row) => {

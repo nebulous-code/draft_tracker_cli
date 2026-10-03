@@ -123,7 +123,14 @@ fn draw_form(frame: &mut Frame<'_>, app: &App, area: Rect) {
     };
 
     let selected = form.selected_project();
+    // Drawn in the same brackets the projects screen uses for a choice field, so
+    // it reads as something you step rather than something you type into.
+    let on_project = form.field == Field::Project;
     let project_value = match selected {
+        Some(choice) if on_project => Span::styled(
+            format!("\u{2039} {} \u{203a}", choice.title),
+            theme::status(choice.status),
+        ),
         Some(choice) => Span::styled(choice.title.clone(), theme::status(choice.status)),
         None => Span::styled("no project selected", theme::hint()),
     };
@@ -308,14 +315,27 @@ fn draw_history(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     // The edit panel takes a fixed slice off the bottom; the list keeps the rest.
     let (list_area, edit_area) = if app.history.edit.is_some() {
         let [list, edit] =
-            Layout::vertical([Constraint::Min(4), Constraint::Length(9)]).areas(area);
+            Layout::vertical([Constraint::Min(4), Constraint::Length(10)]).areas(area);
         (list, Some(edit))
     } else {
         (area, None)
     };
     draw_history_list(frame, app, list_area);
     if let Some(edit_area) = edit_area {
-        draw_edit_panel(frame, app, edit_area);
+        // The picker only takes space while the project is the field in hand.
+        let on_project = app
+            .history
+            .edit
+            .as_ref()
+            .is_some_and(|e| e.field == EditField::Project);
+        if on_project {
+            let [fields, picker] =
+                Layout::horizontal([Constraint::Min(40), Constraint::Length(32)]).areas(edit_area);
+            draw_edit_panel(frame, app, fields);
+            draw_edit_project_picker(frame, app, picker);
+        } else {
+            draw_edit_panel(frame, app, edit_area);
+        }
     }
 }
 
@@ -413,19 +433,23 @@ fn draw_edit_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Span::styled(shown, style)
     };
 
+    let on_project = edit.field == EditField::Project;
+    let project_value = if on_project {
+        Span::styled(
+            format!("\u{2039} {} \u{203a}", edit.project_title),
+            Style::new().fg(theme::FG),
+        )
+    } else {
+        Span::styled(edit.project_title.clone(), theme::label())
+    };
     let mut lines = vec![
-        field_line(
-            "Project",
-            Span::styled(edit.project_title.clone(), theme::label()),
-            None,
-            false,
-        ),
         field_line(
             "Date",
             value(EditField::Date),
             None,
             edit.field == EditField::Date,
         ),
+        field_line("Project", project_value, None, on_project),
         field_line(
             "Session WC",
             value(EditField::SessionWords),
@@ -452,6 +476,11 @@ fn draw_edit_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
         lines.push(Line::from(Span::styled(
             format!("  {problem}"),
             theme::error(),
+        )));
+    } else if on_project {
+        lines.push(Line::from(Span::styled(
+            "  h l step the project  ·  i filters  ·  <leader><CR> saves",
+            theme::hint(),
         )));
     } else {
         lines.push(Line::from(Span::styled(
@@ -498,10 +527,17 @@ fn draw_projects(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     );
 
     let rows = app.projects.visible();
-    let title = if app.projects.filter.is_empty() {
-        format!(" Projects ({}) ", rows.len())
+    // The title states which view this is, so a short list never looks like
+    // missing data.
+    let scope = if app.projects.show_all() {
+        format!("all {}", app.projects.total())
     } else {
-        format!(" Projects ({}) /{} ", rows.len(), app.projects.filter)
+        format!("{} open of {}", rows.len(), app.projects.total())
+    };
+    let title = if app.projects.filter.is_empty() {
+        format!(" Projects ({scope}) ")
+    } else {
+        format!(" Projects ({scope}) /{} ", app.projects.filter)
     };
     let focused = app.projects.edit.is_none();
     let block = Block::bordered()
@@ -514,10 +550,12 @@ fn draw_projects(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         .title_style(theme::label());
 
     if rows.is_empty() {
-        let message = if app.projects.filter.is_empty() {
-            "No projects yet.\n\nPress o to create one."
-        } else {
+        let message = if !app.projects.filter.is_empty() {
             "Nothing matches.\n\nEsc clears the filter."
+        } else if app.projects.total() > 0 {
+            "No open projects.\n\nPress A to show all of them."
+        } else {
+            "No projects yet.\n\nPress o to create one."
         };
         frame.render_widget(
             Paragraph::new(message).style(theme::hint()).block(block),
@@ -955,68 +993,86 @@ pub fn bar(value: i64, max: i64, width: usize) -> String {
 fn draw_stats(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let yoy_height = (app.stats.by_year.len() as u16 + 2).clamp(3, 9);
     let category_height = category_panel_height(&app.stats, area.width);
-    let [kpi_area, projects_area, yoy_area, category_area] = Layout::vertical([
+    // The category bar sits above the year graph: it describes the selected
+    // scope, like everything above it, where the year graph spans all of them.
+    let [kpi_area, projects_area, category_area, yoy_area] = Layout::vertical([
         Constraint::Length(6),
         Constraint::Min(4),
-        Constraint::Length(yoy_height),
         Constraint::Length(category_height),
+        Constraint::Length(yoy_height),
     ])
     .areas(area);
 
     draw_kpis(frame, app, kpi_area);
-    draw_year_projects(frame, app, projects_area);
-    draw_year_over_year(frame, app, yoy_area);
+    draw_scope_projects(frame, app, projects_area);
     draw_category_bar(frame, app, category_area);
+    draw_year_over_year(frame, app, yoy_area);
+}
+
+fn kpi_panel<'a>(
+    title: String,
+    totals: &crate::db::stats::Totals,
+    completed: i64,
+) -> Paragraph<'a> {
+    let kpi = |label: &'static str, value: String| -> Line<'static> {
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled(format!("{label:<12}"), theme::label()),
+            Span::styled(value, Style::new().fg(theme::FG)),
+        ])
+    };
+    let lines = vec![
+        kpi("Words", thousands(totals.words)),
+        kpi("Hours", format!("{:.2}", totals.hours)),
+        kpi("Completed", completed.to_string()),
+        kpi(
+            "Words/Hour",
+            totals
+                .words_per_hour()
+                .map(|r| format!("{r:.0}"))
+                .unwrap_or_else(|| "—".to_string()),
+        ),
+    ];
+    Paragraph::new(lines).block(
+        Block::bordered()
+            .title(title)
+            .border_style(theme::inactive())
+            .title_style(theme::focused()),
+    )
 }
 
 fn draw_kpis(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let stats = &app.stats;
+    // In the all-time view the selected scope *is* lifetime, so one panel holds
+    // everything rather than printing the same four numbers twice.
+    if stats.is_lifetime() {
+        frame.render_widget(
+            kpi_panel(
+                " All time ".to_string(),
+                &stats.lifetime,
+                stats.lifetime_completed,
+            ),
+            area,
+        );
+        return;
+    }
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
-
-    let panel = |title: String, totals: &crate::db::stats::Totals, completed: i64| {
-        let kpi = |label: &'static str, value: String| -> Line<'static> {
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled(format!("{label:<12}"), theme::label()),
-                Span::styled(value, Style::new().fg(theme::FG)),
-            ])
-        };
-        let lines = vec![
-            kpi("Words", thousands(totals.words)),
-            kpi("Hours", format!("{:.2}", totals.hours)),
-            kpi("Completed", completed.to_string()),
-            kpi(
-                "Words/Hour",
-                totals
-                    .words_per_hour()
-                    .map(|r| format!("{r:.0}"))
-                    .unwrap_or_else(|| "—".to_string()),
-            ),
-        ];
-        Paragraph::new(lines).block(
-            Block::bordered()
-                .title(title)
-                .border_style(theme::inactive())
-                .title_style(theme::focused()),
-        )
-    };
-
     frame.render_widget(
-        panel(
+        kpi_panel(
             " Lifetime ".to_string(),
             &stats.lifetime,
             stats.lifetime_completed,
         ),
         left,
     );
-    let year_title = if stats.is_current_year() {
-        format!(" {} (this year) ", stats.year)
+    let title = if stats.is_current_year() {
+        format!(" {} (this year) ", stats.scope.label())
     } else {
-        format!(" {} ", stats.year)
+        format!(" {} ", stats.scope.label())
     };
     frame.render_widget(
-        panel(year_title, &stats.year_totals, stats.year_completed),
+        kpi_panel(title, &stats.selected, stats.selected_completed),
         right,
     );
 }
@@ -1024,20 +1080,35 @@ fn draw_kpis(frame: &mut Frame<'_>, app: &App, area: Rect) {
 /// Titles are cut to ten characters, as the requirements ask.
 const GRAPH_LABEL: usize = 10;
 
-fn draw_year_projects(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn draw_scope_projects(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+    let visible = (area.height as usize).saturating_sub(2).max(1);
+    // Remembered so h and l scroll by what is actually on screen.
+    app.project_graph_rows = visible;
+
     let stats = &app.stats;
+    let total = stats.selected_projects.len();
+    let offset = stats.project_offset().min(total.saturating_sub(1));
+    let shown = total.min(offset + visible);
+
+    let title = if total > visible {
+        format!(
+            " {} projects ({}–{} of {}) ",
+            stats.scope.label(),
+            offset + 1,
+            shown,
+            total
+        )
+    } else {
+        format!(" {} projects ({}) ", stats.scope.label(), total)
+    };
     let block = Block::bordered()
-        .title(format!(
-            " {} projects ({}) ",
-            stats.year,
-            stats.year_projects.len()
-        ))
+        .title(title)
         .border_style(theme::inactive())
         .title_style(theme::label());
 
-    if stats.year_projects.is_empty() {
+    if stats.selected_projects.is_empty() {
         frame.render_widget(
-            Paragraph::new(format!("Nothing written in {}.", stats.year))
+            Paragraph::new(format!("Nothing written in {}.", stats.scope.label()))
                 .style(theme::hint())
                 .block(block),
             area,
@@ -1047,17 +1118,19 @@ fn draw_year_projects(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let words_column = 10;
     let bar_width = (area.width as usize).saturating_sub(GRAPH_LABEL + words_column + 5);
+    // Scaled against the largest in the whole list, not the window, so scrolling
+    // does not silently rescale the bars under the writer.
     let max = stats
-        .year_projects
+        .selected_projects
         .iter()
         .map(|p| p.words)
         .max()
         .unwrap_or(1);
-    let visible = (area.height as usize).saturating_sub(2);
 
-    let mut lines: Vec<Line<'_>> = stats
-        .year_projects
+    let lines: Vec<Line<'_>> = stats
+        .selected_projects
         .iter()
+        .skip(offset)
         .take(visible)
         .map(|project| {
             Line::from(vec![
@@ -1081,15 +1154,6 @@ fn draw_year_projects(frame: &mut Frame<'_>, app: &App, area: Rect) {
             ])
         })
         .collect();
-
-    // Saying how many were cut, rather than silently showing a partial graph.
-    if stats.year_projects.len() > visible && !lines.is_empty() {
-        lines.pop();
-        lines.push(Line::from(Span::styled(
-            format!("  ... and {} more", stats.year_projects.len() - visible + 1),
-            theme::hint(),
-        )));
-    }
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
@@ -1116,7 +1180,8 @@ fn draw_year_over_year(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .by_year
         .iter()
         .map(|(year, words)| {
-            let selected = *year == stats.year;
+            // In the all-time view no single year is selected, so none is lit.
+            let selected = stats.selected_year() == Some(*year);
             Line::from(vec![
                 Span::raw(" "),
                 Span::styled(
@@ -1160,17 +1225,14 @@ fn legend_rows(shares: &[(String, f64, i64)], width: usize) -> Vec<Vec<usize>> {
     let mut current: Vec<usize> = Vec::new();
     let mut used = 1usize; // the leading gutter
     for (index, (name, share, words)) in shares.iter().enumerate() {
-        // swatch + text, plus two spaces between entries
-        let needed = 1
-            + legend_text(name, *share, *words).chars().count()
-            + if current.is_empty() { 0 } else { 2 };
+        let entry = 1 + legend_text(name, *share, *words).chars().count();
+        let needed = entry + if current.is_empty() { 0 } else { 2 };
         if !current.is_empty() && used + needed > width {
             rows.push(std::mem::take(&mut current));
-            used = 1;
+            used = 1 + entry;
+        } else {
+            used += needed;
         }
-        used += 1
-            + legend_text(name, *share, *words).chars().count()
-            + if current.is_empty() { 0 } else { 2 };
         current.push(index);
     }
     if !current.is_empty() {
@@ -1179,7 +1241,10 @@ fn legend_rows(shares: &[(String, f64, i64)], width: usize) -> Vec<Vec<usize>> {
     rows
 }
 
-/// Height the category panel needs: borders, the bar, its legend, and any note.
+/// Two rows of blocks, so the colours read as bands rather than a thin line.
+const CATEGORY_BAR_ROWS: u16 = 2;
+
+/// Height the category panel needs: borders, its legend, the bar, and any note.
 fn category_panel_height(stats: &super::stats::Stats, width: u16) -> u16 {
     let shares = stats.category_shares();
     if shares.is_empty() {
@@ -1187,14 +1252,17 @@ fn category_panel_height(stats: &super::stats::Stats, width: u16) -> u16 {
     }
     let rows = legend_rows(&shares, width.saturating_sub(2) as usize).len() as u16;
     let note = u16::from(!stats.categories_without_a_share().is_empty());
-    (3 + rows + note).clamp(4, 9)
+    (2 + CATEGORY_BAR_ROWS + rows + note).clamp(5, 10)
 }
 
 /// The category split, drawn as one bar divided by share.
+///
+/// The key sits above the bar: it is read first, and a bar with its legend
+/// underneath puts the explanation after the thing needing explaining.
 fn draw_category_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let stats = &app.stats;
     let block = Block::bordered()
-        .title(format!(" {} by category ", stats.year))
+        .title(format!(" {} by category ", stats.scope.label()))
         .border_style(theme::inactive())
         .title_style(theme::label());
 
@@ -1234,14 +1302,8 @@ fn draw_category_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     }
 
     let colour = |index: usize| Style::new().fg(theme::SERIES[index % theme::SERIES.len()]);
-    let bar_spans: Vec<Span<'_>> = shares
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| cells[*index] > 0)
-        .map(|(index, _)| Span::styled(EIGHTHS[7].to_string().repeat(cells[index]), colour(index)))
-        .collect();
 
-    let mut lines = vec![Line::from(bar_spans)];
+    let mut lines: Vec<Line<'_>> = Vec::new();
     for row in legend_rows(&shares, width) {
         let mut spans = vec![Span::raw(" ")];
         for (position, index) in row.iter().enumerate() {
@@ -1257,6 +1319,17 @@ fn draw_category_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         }
         lines.push(Line::from(spans));
     }
+
+    let bar_spans: Vec<Span<'_>> = shares
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| cells[*index] > 0)
+        .map(|(index, _)| Span::styled(EIGHTHS[7].to_string().repeat(cells[index]), colour(index)))
+        .collect();
+    for _ in 0..CATEGORY_BAR_ROWS {
+        lines.push(Line::from(bar_spans.clone()));
+    }
+
     let ignored = stats.categories_without_a_share();
     if !ignored.is_empty() {
         let names: Vec<String> = ignored
@@ -1264,18 +1337,76 @@ fn draw_category_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
             .map(|c| format!("{} ({})", c.category, thousands(c.words)))
             .collect();
         lines.push(Line::from(Span::styled(
-            format!("no share: {}", names.join(", ")),
+            format!(" no share: {}", names.join(", ")),
             theme::warning(),
         )));
     }
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
+/// The project picker, shown beside the edit panel while the project is in hand.
+fn draw_edit_project_picker(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+    let filter = app
+        .history
+        .edit
+        .as_ref()
+        .map(|e| e.filter.clone())
+        .unwrap_or_default();
+    let selected = app.history.edit_choice_index();
+    let choices = app.history.edit_choices();
+
+    let title = if filter.is_empty() {
+        format!(" Move to ({}) ", choices.len())
+    } else {
+        format!(" Move to ({}) /{filter} ", choices.len())
+    };
+    let block = Block::bordered()
+        .title(title)
+        .border_style(theme::focused())
+        .title_style(theme::label())
+        .style(theme::float());
+
+    if choices.is_empty() {
+        frame.render_widget(
+            Paragraph::new("Nothing matches.\n\nEsc stops filtering.")
+                .style(theme::hint())
+                .block(block),
+            area,
+        );
+        return;
+    }
+
+    let items: Vec<ListItem<'_>> = choices
+        .iter()
+        .map(|choice| {
+            ListItem::new(Line::from(Span::styled(
+                choice.title.clone(),
+                theme::status(choice.status),
+            )))
+        })
+        .collect();
+    let mut state = ListState::default().with_selected(selected);
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(block)
+            .highlight_style(theme::selected_row())
+            .highlight_symbol("\u{203a} "),
+        area,
+        &mut state,
+    );
+}
+
 fn draw_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let mut spans = vec![
-        Span::styled(format!(" {} ", mode_label(app)), theme::selected_row()),
-        Span::raw(" "),
-    ];
+    // The dashboard is read-only, so a mode indicator there says nothing and
+    // costs room on the one line that has to fit.
+    let mut spans = if app.screen == Screen::Stats {
+        vec![Span::raw(" ")]
+    } else {
+        vec![
+            Span::styled(format!(" {} ", mode_label(app)), theme::selected_row()),
+            Span::raw(" "),
+        ]
+    };
 
     let prompt = if app.history.confirming_delete {
         app.history.selected_row().map(|row| {
@@ -1338,7 +1469,14 @@ fn draw_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
                     "Tab switches pane  ·  i edits  ·  o new",
                 ),
             },
-            Screen::Stats => ("viewing", "[ ] step years  ·  0 this year"),
+            Screen::Stats => (
+                if app.stats.is_lifetime() {
+                    "all time"
+                } else {
+                    "by year"
+                },
+                "j k year  ·  h l scroll  ·  0 now  ·  $ all time",
+            ),
             _ => (app.form.field.label(), "<leader><CR> submit"),
         };
         spans.push(Span::styled(where_am_i, theme::label()));

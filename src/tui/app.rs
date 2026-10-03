@@ -8,8 +8,8 @@ use chrono::Local;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
 use super::categories::{self, Categories, CategoryEdit, Pane, TypeEdit};
-use super::entry::{Choice, EntryForm, Mode};
-use super::history::History;
+use super::entry::{Choice, EntryForm, Field, Mode};
+use super::history::{EditField, History};
 use super::projects::Projects;
 use super::stats::Stats;
 use crate::db::models::Status;
@@ -65,6 +65,9 @@ pub struct App {
     pub projects: Projects,
     pub categories: Categories,
     pub stats: Stats,
+    /// How many project rows the last frame had room for, so scrolling moves by
+    /// what the writer can actually see rather than by a guess.
+    pub project_graph_rows: usize,
     pub flash: Option<Flash>,
     pub help_visible: bool,
     /// The leader key has been pressed and the next key completes a sequence.
@@ -78,7 +81,10 @@ pub struct App {
 impl App {
     pub fn new(db: Db) -> Result<Self> {
         let form = EntryForm::new(load_choices(&db)?, Local::now().date_naive());
-        let history = History::new(repo::recent_entries_with_project(db.conn(), None)?);
+        let history = History::new(
+            repo::recent_entries_with_project(db.conn(), None)?,
+            load_choices(&db)?,
+        );
         let projects = Projects::new(
             repo::list_projects_with_metrics(db.conn())?,
             repo::list_categories_with_usage(db.conn())?,
@@ -96,6 +102,7 @@ impl App {
             projects,
             categories,
             stats,
+            project_graph_rows: 1,
             flash: None,
             help_visible: false,
             leader_pending: false,
@@ -226,7 +233,7 @@ impl App {
 
     fn reload_history(&mut self) -> Result<()> {
         let rows = repo::recent_entries_with_project(self.db.conn(), None)?;
-        self.history.refresh(rows);
+        self.history.refresh(rows, load_choices(&self.db)?);
         Ok(())
     }
 
@@ -286,20 +293,32 @@ impl App {
                 Ok(Flow::Continue)
             }
             Mode::Normal => {
+                // `gg` and `G` only mean anything to the project list.
                 if self.take_pending_g(key) {
-                    self.form.select_first();
+                    if self.form.field == Field::Project {
+                        self.form.select_first();
+                    }
                     return Ok(Flow::Continue);
                 }
                 match key.code {
                     KeyCode::Char(' ') => self.leader_pending = true,
                     KeyCode::Char('?') => self.help_visible = true,
                     KeyCode::Char('q') => return Ok(self.request_quit()),
-                    KeyCode::Tab => self.form.next_field(),
-                    KeyCode::BackTab => self.form.previous_field(),
-                    KeyCode::Char('j') | KeyCode::Down => self.form.select_next(),
-                    KeyCode::Char('k') | KeyCode::Up => self.form.select_previous(),
-                    KeyCode::Char('g') => self.pending_g = true,
-                    KeyCode::Char('G') => self.form.select_last(),
+                    // j and k walk the form, the same as Tab, so they never
+                    // reach past the focused field to move something else.
+                    KeyCode::Tab | KeyCode::Char('j') | KeyCode::Down => self.form.next_field(),
+                    KeyCode::BackTab | KeyCode::Char('k') | KeyCode::Up => {
+                        self.form.previous_field()
+                    }
+                    // A choice field steps with h and l, as on the projects screen.
+                    KeyCode::Char('l') | KeyCode::Right => self.step_project(1),
+                    KeyCode::Char('h') | KeyCode::Left => self.step_project(-1),
+                    KeyCode::Char('g') if self.form.field == Field::Project => {
+                        self.pending_g = true
+                    }
+                    KeyCode::Char('G') if self.form.field == Field::Project => {
+                        self.form.select_last()
+                    }
                     KeyCode::Char('i') | KeyCode::Char('a') => self.form.begin_insert(),
                     KeyCode::Char('/') => self.form.begin_filter(),
                     KeyCode::Char('A') => {
@@ -317,6 +336,25 @@ impl App {
                 }
                 Ok(Flow::Continue)
             }
+        }
+    }
+
+    /// Step the project choice, saying so if the cursor is somewhere else.
+    fn step_project(&mut self, step: i64) {
+        if self.form.field != Field::Project {
+            self.set_flash(
+                Tone::Info,
+                format!(
+                    "h and l step the project; {} is typed",
+                    self.form.field.label()
+                ),
+            );
+            return;
+        }
+        if step >= 0 {
+            self.form.select_next();
+        } else {
+            self.form.select_previous();
         }
     }
 
@@ -400,25 +438,42 @@ impl App {
                     KeyCode::Esc | KeyCode::Enter => edit.mode = Mode::Normal,
                     KeyCode::Backspace => edit.backspace(),
                     KeyCode::Tab => {
-                        edit.field = edit.field.next();
-                        edit.mode = Mode::Normal;
+                        let next = edit.field.next();
+                        edit.set_field(next);
                     }
                     KeyCode::BackTab => {
-                        edit.field = edit.field.previous();
-                        edit.mode = Mode::Normal;
+                        let previous = edit.field.previous();
+                        edit.set_field(previous);
                     }
+                    // While narrowing the picker the list keeps moving under it.
+                    KeyCode::Down if edit.mode == Mode::Filter => self.history.step_project(1),
+                    KeyCode::Up if edit.mode == Mode::Filter => self.history.step_project(-1),
                     KeyCode::Char(c) => edit.push_char(c),
                     _ => {}
                 }
+                // Typing to find a project should land on it.
+                self.history.sync_project_to_filter();
                 Ok(Flow::Continue)
             }
             Mode::Normal => {
                 match key.code {
                     KeyCode::Char(' ') => self.leader_pending = true,
                     KeyCode::Char('?') => self.help_visible = true,
-                    KeyCode::Tab => edit.field = edit.field.next(),
-                    KeyCode::BackTab => edit.field = edit.field.previous(),
-                    KeyCode::Char('i') | KeyCode::Char('a') => edit.mode = Mode::Insert,
+                    KeyCode::Tab | KeyCode::Char('j') | KeyCode::Down => {
+                        let next = edit.field.next();
+                        edit.set_field(next);
+                    }
+                    KeyCode::BackTab | KeyCode::Char('k') | KeyCode::Up => {
+                        let previous = edit.field.previous();
+                        edit.set_field(previous);
+                    }
+                    KeyCode::Char('l') | KeyCode::Right => self.step_edit_project(1),
+                    KeyCode::Char('h') | KeyCode::Left => self.step_edit_project(-1),
+                    KeyCode::Char('i') | KeyCode::Char('a') => edit.begin_insert(),
+                    KeyCode::Char('/') => {
+                        edit.set_field(EditField::Project);
+                        edit.begin_insert();
+                    }
                     KeyCode::Esc => self.discard_edit(),
                     KeyCode::Char('q') => return Ok(self.request_quit()),
                     _ => {}
@@ -426,6 +481,29 @@ impl App {
                 Ok(Flow::Continue)
             }
         }
+    }
+
+    /// Step the entry's project, saying where the keys apply if elsewhere.
+    fn step_edit_project(&mut self, step: i64) {
+        let on_project = self
+            .history
+            .edit
+            .as_ref()
+            .is_some_and(|e| e.field == EditField::Project);
+        if !on_project {
+            let label = self
+                .history
+                .edit
+                .as_ref()
+                .map(|e| e.field.label())
+                .unwrap_or("this field");
+            self.set_flash(
+                Tone::Info,
+                format!("h and l step the project; {label} is typed"),
+            );
+            return;
+        }
+        self.history.step_project(step);
     }
 
     fn start_edit(&mut self) {
@@ -600,6 +678,15 @@ impl App {
             KeyCode::Char('i') | KeyCode::Char('a') | KeyCode::Enter => self.start_project_edit(),
             KeyCode::Char('o') => self.projects.begin_create(),
             KeyCode::Char('x') => self.cycle_selected_status()?,
+            KeyCode::Char('A') => {
+                self.projects.toggle_show_all();
+                let scope = if self.projects.show_all() {
+                    "showing all projects"
+                } else {
+                    "showing open projects"
+                };
+                self.set_flash(Tone::Info, scope);
+            }
             KeyCode::Char('d') => self.press_d_projects(),
             _ => {}
         }
@@ -613,6 +700,9 @@ impl App {
             return Ok(());
         };
         repo::set_project_status(self.db.conn(), id, status)?;
+        // Held in view so the change is visible and the key can be pressed
+        // again to carry on round the cycle.
+        self.projects.pin(id);
         self.reload_everything()?;
         self.set_flash(Tone::Success, format!("{title} is now {status}"));
         Ok(())
@@ -662,8 +752,12 @@ impl App {
             KeyCode::Char(' ') => self.leader_pending = true,
             KeyCode::Char('?') => self.help_visible = true,
             KeyCode::Char('q') => return Ok(self.request_quit()),
-            KeyCode::Tab => edit.field = edit.field.next(),
-            KeyCode::BackTab => edit.field = edit.field.previous(),
+            // Tab and j/k both walk the fields: Tab is the habit from forms,
+            // j and k the habit from vim, and neither costs the other anything.
+            KeyCode::Tab | KeyCode::Char('j') | KeyCode::Down => edit.field = edit.field.next(),
+            KeyCode::BackTab | KeyCode::Char('k') | KeyCode::Up => {
+                edit.field = edit.field.previous()
+            }
             // A choice field steps with h and l; a text field is typed into.
             KeyCode::Char('l') | KeyCode::Right => self.projects.cycle_choice(1),
             KeyCode::Char('h') | KeyCode::Left => self.projects.cycle_choice(-1),
@@ -824,8 +918,8 @@ impl App {
             KeyCode::Char(' ') => self.leader_pending = true,
             KeyCode::Char('?') => self.help_visible = true,
             KeyCode::Char('q') => return Ok(self.request_quit()),
-            KeyCode::Tab => edit.next_field(),
-            KeyCode::BackTab => edit.previous_field(),
+            KeyCode::Tab | KeyCode::Char('j') | KeyCode::Down => edit.next_field(),
+            KeyCode::BackTab | KeyCode::Char('k') | KeyCode::Up => edit.previous_field(),
             KeyCode::Char('l') | KeyCode::Right => self.categories.cycle_choice(1),
             KeyCode::Char('h') | KeyCode::Left => self.categories.cycle_choice(-1),
             KeyCode::Char('i') | KeyCode::Char('a') => edit.set_mode(Mode::Insert),
@@ -920,33 +1014,60 @@ impl App {
     // ---------------------------------------------------------------- stats
 
     fn on_key_stats(&mut self, key: KeyEvent) -> Result<Flow> {
+        if self.take_pending_g(key) {
+            let visible = self.project_graph_rows;
+            self.stats.scroll_projects(i64::MIN / 4, visible);
+            return Ok(Flow::Continue);
+        }
         match key.code {
             KeyCode::Char(' ') => self.leader_pending = true,
             KeyCode::Char('?') => self.help_visible = true,
             KeyCode::Char('q') => return Ok(self.request_quit()),
-            KeyCode::Char('[') | KeyCode::Left | KeyCode::Char('h') => self.step_year(-1)?,
-            KeyCode::Char(']') | KeyCode::Right | KeyCode::Char('l') => self.step_year(1)?,
+            // The years are stacked vertically in the graph, so k is older and
+            // j is newer, with all time sitting past the newest.
+            KeyCode::Char('k') | KeyCode::Up | KeyCode::Char('[') => self.step_scope(-1)?,
+            KeyCode::Char('j') | KeyCode::Down | KeyCode::Char(']') => self.step_scope(1)?,
+            // h and l are free here, so they walk the project graph, which in the
+            // all-time view holds every project ever started.
+            KeyCode::Char('l') | KeyCode::Right => self.scroll_projects(1),
+            KeyCode::Char('h') | KeyCode::Left => self.scroll_projects(-1),
             KeyCode::Char('0') => self.stats.go_to_current_year(&self.db)?,
+            KeyCode::Char('$') => self.stats.go_to_lifetime(&self.db)?,
+            KeyCode::Char('g') => self.pending_g = true,
+            KeyCode::Char('G') => {
+                let visible = self.project_graph_rows;
+                self.stats.scroll_projects(i64::MAX / 4, visible);
+            }
             _ => {}
         }
         Ok(Flow::Continue)
     }
 
-    /// Step the dashboard a year back or forward, saying so at either end.
-    fn step_year(&mut self, direction: i64) -> Result<()> {
-        let moved = if direction < 0 {
-            self.stats.previous_year(&self.db)?
-        } else {
-            self.stats.next_year(&self.db)?
-        };
-        if !moved {
-            let edge = if direction < 0 { "earliest" } else { "latest" };
+    /// Step the dashboard's scope, saying so at either end of the sequence.
+    fn step_scope(&mut self, direction: i64) -> Result<()> {
+        if !self.stats.step(direction, &self.db)? {
+            let edge = if direction < 0 {
+                "earliest year"
+            } else {
+                "end"
+            };
             self.set_flash(
                 Tone::Info,
-                format!("{} is the {edge} year with entries", self.stats.year),
+                format!("{} is the {edge}", self.stats.scope.label()),
             );
         }
         Ok(())
+    }
+
+    fn scroll_projects(&mut self, step: i64) {
+        let visible = self.project_graph_rows;
+        if !self.stats.scroll_projects(step, visible) {
+            let total = self.stats.selected_projects.len();
+            if total > visible {
+                let edge = if step < 0 { "top" } else { "end" };
+                self.set_flash(Tone::Info, format!("already at the {edge} of the list"));
+            }
+        }
     }
 
     // ---------------------------------------------------------------- shared

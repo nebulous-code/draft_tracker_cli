@@ -194,7 +194,9 @@ Oddities carried through intact rather than cleaned, because they are real worki
 
 The app opens on the entry form, which is the daily path.
 
-**Entry** takes a date defaulting to today and accepting past or future, a project picked from the open list with a key to widen it to completed and abandoned projects too, since work does get picked back up, hours as a decimal of at least 0.25, and the project's current total word count. Session word count and words per hour are read-only and recalculate as you type. The session count is the typed total minus the sum of the project's existing entries. That reference is deliberately not date-ordered: the number you type is the manuscript's count right now, so it is measured against everything logged, which also means back-dating an entry needs no recalculation of anything. On a project's very first entry there is no prior total, so the form asks for the session count directly and labels it as such, which is how a manuscript started before tracking gets onto the books. A negative session count renders in the warning colour with the words cut spelled out, and submits normally.
+**Entry** takes a date defaulting to today and accepting past or future, a project stepped from the open list with a key to widen it to completed and abandoned projects too, since work does get picked back up, hours as a decimal of at least 0.25, and the project's current total word count. Session word count and words per hour are read-only and recalculate as you type. The session count is the typed total minus the sum of the project's existing entries. That reference is deliberately not date-ordered: the number you type is the manuscript's count right now, so it is measured against everything logged, which also means back-dating an entry needs no recalculation of anything. On a project's very first entry there is no prior total, so the form asks for the session count directly and labels it as such, which is how a manuscript started before tracking gets onto the books. A negative session count renders in the warning colour with the words cut spelled out, and submits normally.
+
+The project is a choice field, stepped with `h` and `l` exactly as a project's category and status are on the projects screen, and drawn in the same brackets so it reads as something stepped rather than typed. `j` and `k` walk between fields like `Tab`, which is the correction to a first attempt where they moved the project list from wherever the cursor happened to be: a key that reaches past the focused field to change something else is a key that will eventually change the wrong thing. `i` on the project field starts filtering rather than refusing, because a picker holding dozens of projects is narrowed far faster by typing than by stepping.
 
 Hours has a floor of 0.25 and zero is refused: submitting with less is blocked, with the reason shown rather than the keystroke silently doing nothing. This is a deliberate accounting rule, not a guard against bad input. A minute spent is counted as fifteen for the purpose of a words-per-hour figure, because a session rounded down to nothing produces an undefined or absurd rate and misrepresents the day. Encoding it means the figure can never be distorted by a session that claims no time. All 654 imported entries already satisfy it, and every recorded value is a multiple of a quarter hour.
 
@@ -202,13 +204,15 @@ Hours has a floor of 0.25 and zero is refused: submitting with less is blocked, 
 
 The number edited here is the session count itself, not a manuscript total. The entry form derives a session from a running total, but once a row is stored there is no unambiguous total to re-derive it from, since later entries have moved the running figure on. Editing the figure the row actually holds is the only honest option, and the panel labels it so, because the same words mean something different on the two screens.
 
-Reassigning an entry to a different project is deliberately out of scope: it would need a second project picker inside the edit panel, and deleting the row and adding it again achieves the same thing. Every other field can be corrected in place.
+An entry's project is editable, stepped with `h` and `l` exactly as every other choice field in the application, with a picker listing the candidates beside the panel. The picker appears only while the project is the field in hand, because it is the one field that needs a list and the panel has other rows to show the rest of the time. It offers closed projects as well as open ones, since the reason to move an entry is that it was filed somewhere wrong and the right home may well be finished. Typing narrows the list and lands on what it finds, rather than leaving the old project pending behind a list that no longer contains it; nothing is written until the edit is saved. An earlier draft of this design left the project read-only on the grounds that a second picker was too much machinery and that deleting and re-adding the row would do. That reasoning expired once choice fields existed elsewhere, and it had always understated the cost: re-adding loses the notes and makes the writer work out what to type against a running total.
 
 The whole table is loaded rather than paged. A limit would silently put the oldest entries out of reach on the one screen whose job is fixing mistakes, and a writing life's worth of sessions is a few tens of thousands of rows.
 
 An edit left open is closed when the screen is left, with a message saying the change was discarded. Keeping it open would mean returning later to a panel holding changes with no memory of having started them, and quitting with an open edit asks for confirmation the same way an unsubmitted entry does.
 
-**Projects** lists every project with the derived metrics above, creates and edits them, and cycles status. Editing covers title, category, status and description. Status cycles on a single key with no panel opening, which is what makes a review pass over 78 projects quick; the list shows the compact figures and a pane beneath it gives the selected project's full set.
+**Projects** opens on the open projects alone, with `A` widening it to all of them, because a writing life accumulates finished work and the handful still going is what a writer is usually looking at. The title states which view it is, so a short list is never mistaken for missing data. It lists each project with the derived metrics above, creates and edits them, and cycles status.
+
+Cycling the status of a project in the open-only view holds that row in view until the cursor moves off it. Letting it vanish the instant it stopped being open would hide what the keystroke did and strand the cycle halfway, with no way to carry on to abandoned. The cursor moves where it was sent and the row falls away behind it. Editing covers title, category, status and description. Status cycles on a single key with no panel opening, which is what makes a review pass over 78 projects quick; the list shows the compact figures and a pane beneath it gives the selected project's full set.
 
 Deleting a project is refused outright when it has entries, rather than offered behind a confirmation. `entries` cascades on delete, so agreeing to the prompt would destroy the record of the work done, and abandoning the project is what the writer almost always means instead. The refusal names the entry count and points at the status key. The repository enforces this too, independently of what the screen believes, so a stale list cannot destroy work.
 
@@ -220,13 +224,17 @@ A field whose value comes from a fixed set, a project's category and status and 
 
 **Stats** is the dashboard, with Lifetime and the selected year as titled sections. The year selector is wired up in the MVP rather than deferred: the queries are year-parameterised anyway, so the only additional work is two keybindings, which is less effort than leaving a hardcoded year to remove later. Each section also carries a words-per-hour figure, since it costs nothing to divide two numbers already on screen.
 
-Stepping moves between years that have entries rather than through the calendar, so a keystroke never lands on a year of zeroes; the current year is always offered even before anything is logged in it, so the screen a writer opens is the one they are living in. Either end says so rather than sitting mute.
+All time sits at the end of the sequence of years, so the selection walks 2023, 2024, 2025, 2026, all time. `j` and `k` move through it, which is the pairing the eye expects when the years are drawn stacked vertically; `[` and `]` do the same. `$` jumps to the end of the sequence and `0` returns to the year the writer is living in, borrowing both meanings from a line of text. Stepping moves between years that have entries rather than through the calendar, so a keystroke never lands on a year of zeroes; the current year is always offered even before anything is logged in it. Either end says so rather than sitting mute.
+
+In the all-time view the selected scope is lifetime, so the two KPI panels would print the same four numbers side by side. One panel spans the row instead, which also makes the mode change visible at a glance.
+
+With the years bound to `j` and `k`, `h` and `l` are free to scroll the project graph, which is what the all-time view needs: every project a writer has ever started is on that list. `gg` and `G` reach its ends, the title states which slice is on screen, and the bars stay scaled against the largest in the whole list so scrolling does not quietly rescale them. The dashboard is read-only, so it shows no mode indicator.
 
 Bars are drawn with eighth-width block characters, so a short bar is not rounded away to nothing and a long one is not quantised to whole columns. A value that is not zero always draws at least one eighth.
 
-The category bar hands out its cells largest-remainder first, so the segments add up to the full width instead of leaving a gap to rounding. Shares are taken against the sum of the positive categories, not the year's net total: a revision-heavy category can net out below zero, a negative slice of a bar means nothing, and such a category is named beneath the bar instead of being silently dropped. The legend wraps onto as many lines as it needs and the panel grows to fit, because a legend that quietly loses its last entries is worse than one that takes an extra line.
+The category bar sits above the year graph, since it describes the selected scope like everything above it, where the year graph spans all of them. Its key is drawn above the bar: the key is read first, and putting it underneath would place the explanation after the thing needing explained. The bar itself is two rows deep so the colours read as bands rather than a thin line.
 
-The project graph shows as many bars as there is room for and says how many it left out, rather than presenting a partial picture as if it were the whole.
+The category bar hands out its cells largest-remainder first, so the segments add up to the full width instead of leaving a gap to rounding. Shares are taken against the sum of the positive categories, not the year's net total: a revision-heavy category can net out below zero, a negative slice of a bar means nothing, and such a category is named beneath the bar instead of being silently dropped. The legend wraps onto as many lines as it needs and the panel grows to fit, because a legend that quietly loses its last entries is worse than one that takes an extra line.
 
 Creating a project that is already complete and predates 2024 is out of scope.
 
@@ -238,17 +246,18 @@ Leader is space. No control combinations are used anywhere.
 | --- | --- |
 | `?` | help popup, context-aware per screen |
 | `<leader>e` / `<leader>h` / `<leader>p` / `<leader>c` / `<leader>s` | entry, history, projects, categories, stats |
-| `j` `k` `h` `l`, `gg`, `G` | movement |
+| `j` `k`, `gg`, `G` | movement; in any form `j` and `k` walk between fields, like `Tab` |
+| `h` / `l` | step a choice field: the entry form's project, a project's category and status, a category's type; switch pane on the categories screen |
 | `Tab` / `Shift-Tab` | next and previous field in a form |
-| `i` / `a`, `Esc` | begin and end editing a field |
+| `i` / `a`, `Esc` | begin and end editing a field; on a choice field, narrow its list |
 | `/`, `n`, `N` | filter a list and step matches |
-| `A` | on the entry form, widen the project list to completed and abandoned projects |
+| `A` | widen a list from open projects to all of them, on the entry form and the projects screen |
 | `o` | create a record on the projects or categories screen |
-| `h` / `l` | step a choice field while editing; switch pane on the categories screen |
 | `x` | cycle status on the projects list: open, completed, abandoned |
 | `dd` | delete, then `y` to confirm; anything else keeps the row |
 | `<leader><CR>` | submit a form |
-| `[` / `]` / `0` | previous year, next year, back to current year on stats; `h` and `l` also step |
+| `j` / `k`, `[` / `]` | step the dashboard's scope: older year, newer year, then all time |
+| `0` / `$` | on stats, this year / all time |
 | `q` | quit, confirming when a form has unsaved input |
 
 Submit is `<leader><CR>`. The requirements originally asked for `Ctrl-Enter`, which predates the no-control rule added afterwards; `mvp_design_doc.md` has been updated to match, so nothing in the app binds a control combination and the keymap is portable across mac, linux and windows.
