@@ -1,0 +1,258 @@
+# Draft Tracker - Technical Design
+
+Companion to `mvp_design_doc.md`, which holds the requirements. This file records how the MVP is built and why each choice was made. Every number quoted here was measured by parsing the three `.ods` files, not estimated.
+
+## Stack
+
+Rust, with `ratatui` over `crossterm` for the TUI and `rusqlite` (with the `bundled` feature) for storage. Bundling SQLite means the binary has no system library dependency, which matters because this is a personal tool that should keep working after an OS upgrade. Nothing here needs async, so there is no runtime.
+
+The importer reads `.ods` with `calamine`, which handles the OpenDocument repeated-row and repeated-column encodings that these files use heavily. That encoding is the one real risk in the import, so validating `calamine` against the actual files is the first task in the build sequence rather than an assumption baked into later work. The fallback, if it mishandles them, is a direct `zip` + `quick-xml` read of `content.xml`, which is already proven out: the expected-import figures below came from exactly that approach.
+
+The importer ships as a subcommand, `draft-tracker import <dir>`, not a standalone script. It needs the same schema and the same project-and-category resolution logic as the app, and a subcommand shares that code instead of duplicating it in a second language that could drift. It is reusable by any writer whose journal meets the input contract below, and contains no project-specific rules.
+
+Database path is `$XDG_DATA_HOME/draft_tracker/draft_tracker.db`, falling back to `~/.local/share/draft_tracker/draft_tracker.db`, overridable with `--db <path>` or `DRAFT_TRACKER_DB`. The override exists so the import can be rehearsed against a scratch copy before touching the real database.
+
+Schema versioning uses SQLite's own `user_version` pragma with hand-written stepwise migrations. A migration framework would be more machinery than a four-table schema earns.
+
+## Data model
+
+Types are the parent and categories hang off them, so a project carries one category and its type is derived through that. This is the business distinction: the category is what the thing is (short story, novel, blog post, kids book) and the type is what register it is written in (fiction, non-fiction, creative non-fiction).
+
+```sql
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE types (
+  id          INTEGER PRIMARY KEY,
+  name        TEXT NOT NULL UNIQUE,
+  description TEXT
+);
+
+CREATE TABLE categories (
+  id          INTEGER PRIMARY KEY,
+  name        TEXT NOT NULL UNIQUE,
+  type_id     INTEGER NOT NULL REFERENCES types(id),
+  description TEXT
+);
+
+CREATE TABLE projects (
+  id                  INTEGER PRIMARY KEY,
+  title               TEXT NOT NULL UNIQUE,
+  category_id         INTEGER REFERENCES categories(id),
+  status              TEXT NOT NULL DEFAULT 'open'
+                        CHECK (status IN ('open', 'completed', 'abandoned')),
+  description         TEXT,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE entries (
+  id                 INTEGER PRIMARY KEY,
+  entry_date         TEXT    NOT NULL,              -- ISO-8601, 'YYYY-MM-DD'
+  project_id         INTEGER NOT NULL REFERENCES projects(id),
+  session_word_count INTEGER NOT NULL,              -- may be negative; revision cuts are real
+  hours              REAL    NOT NULL CHECK (hours >= 0.25),
+  notes              TEXT,
+  created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX idx_entries_project ON entries(project_id);
+CREATE INDEX idx_entries_date    ON entries(entry_date);
+```
+
+`status` replaces an earlier `is_completed` boolean because finishing a project and giving up on one are different outcomes that a boolean collapses. A piece written and never shipped is abandoned, not completed, and counting it as either makes the completed-projects figures lie. A `CHECK` constraint rather than a lookup table, because three values fixed by their meaning are not data the writer needs to extend, and storing the word keeps ad hoc SQL against this database readable.
+
+`projects.title` is unique because the importer keys projects by name to stitch them across the three yearly files; three projects genuinely span two files, so without that key `Flask Vol 1` would import twice.
+
+`category_id` is nullable, since the requirements mark only Title as required. All 77 imported projects get a category, so a null only arises on a project created by hand without one. Statistics bucket nulls as `Uncategorized` rather than dropping them, so the category distribution bar always sums to 100 percent of the year's words.
+
+The entry stores only the session word count, never the Project WC that was typed to produce it. Storing both would create two sources of truth that fall out of sync the moment a past entry is edited, and would force a cascading rewrite of every later row's Project WC. Storing just the session count makes edits local: change one row and every derived total is still correct, because totals are order-independent sums.
+
+There is deliberately no stored baseline for work done before tracking began. An earlier draft of this design carried `starting_word_count` and `starting_hours` on the project, because three projects had been tracked from partway through a manuscript. Importing the 2023 journal replaced all three with real dated entries, which is strictly better: the words and the hours now belong to the days they happened on, so they count toward a year as well as a project, and nothing has to be kept in sync by hand. With every baseline at zero the columns earned nothing, so they are gone.
+
+The cost is that a project begun mid-manuscript has nowhere to record what came before. Two things cover it. On import, a project whose earliest entry implies pre-tracking words is reported by name with the number, so the gap is visible rather than silently dropped, and can be closed by importing the earlier journal as its own file. In the entry form, the first entry on a project asks for the words written that session rather than the manuscript total, since there is no prior total to subtract from; every later entry takes the total as usual.
+
+## Derived metrics
+
+Every project metric is a plain aggregate of that project's entries, which is what keeps the project screen and the dashboard in agreement.
+
+`abandoned` and `completed` are treated identically by every derived calculation. Both mean the writer has stopped, so both get an End Date from the last entry, and both are held out of the entry form's default project list. The distinction exists for one reason only, which is that abandoned work must not be counted as finished: it is excluded from the Completed Projects figures, and its bar is coloured differently. Anywhere else, a rule that applies to a completed project applies to an abandoned one.
+
+| Metric | Definition |
+| --- | --- |
+| Start Date | `MIN(entry_date)` for the project |
+| End Date | `MAX(entry_date)` when `status` is not `open`, otherwise null |
+| Total Word Count | `SUM(session_word_count)` |
+| Days Written | `COUNT(DISTINCT entry_date)` |
+| Hours Written | `SUM(hours)` |
+| Hours per Day | Hours Written / Days Written, null when Days Written is 0 |
+| Words per Hour | Total Word Count / Hours Written, null when Hours Written is 0 |
+
+Because every word and hour now belongs to a dated entry, Dashboard Lifetime Words equals the sum of the project totals exactly, and the same holds for hours. Nothing has to be reconciled between the two screens, and a figure that does not add up is a bug rather than an expected artefact.
+
+Dashboard queries all take an optional year and resolve lifetime when it is absent, so a single query serves both sections and the year is never hardcoded.
+
+| KPI | Definition |
+| --- | --- |
+| Words | `SUM(session_word_count)`, filtered to the year when given |
+| Hours | `SUM(hours)`, filtered to the year when given |
+| Completed Projects | lifetime: count where `status` is `completed`; year: that, and `MAX(entry_date)` falls in the year |
+| Projects graph | per project with an entry in the year, its summed words; title truncated to 10 characters; bar green when completed, muted red when abandoned, default when open |
+| Year over Year | words grouped by `strftime('%Y', entry_date)` |
+| Category distribution | per category, its year words over the year total, drawn as one segmented bar |
+
+Words per hour is allowed to go negative, since a revision day that cuts words is a real working day. It is undefined rather than negative when hours is 0, which the two historical rows below require; those render as an em dash.
+
+## Import
+
+This project is intended to go public as a portfolio piece, so the importer carries no knowledge of any particular writer's projects, categories or titles. Everything it does is a rule that applies to any writing journal in the expected shape. Personal data cleanup happens in the spreadsheets instead, which is where it belongs: the sheets are the writer's own records, they are gitignored, and a clone of this repo should not make anyone read through someone else's project names to understand the code.
+
+### Input contract
+
+The importer reads every `.ods` and `.csv` in the given directory, taking the `Data` sheet of a workbook and the whole file of a CSV, and locates columns by header name, taking the leftmost match for each. Supporting CSV matters for a tool meant to be usable by someone else: a spreadsheet of this shape is a convenience, not a requirement, and a plain CSV is something a writer can produce from any journal, by hand, without owning LibreOffice.
+
+Two kinds of file are recognised. An entries file is one whose headers include `Date`. A projects file is one carrying `Project` and `Status` but no `Date`, and it supplies the per-project metadata that a log of daily sessions cannot express. Detection is by header rather than by filename, so neither file has to be named a particular way.
+
+For an entries file, required headers are `Date`, `Project`, `Hours` and `Category`, plus at least one of `Day WC` and `Project WC`. Optional headers are `Type` and `Notes`, and whichever of the two word-count columns is not supplied. A missing required header aborts the import with a message naming it, rather than silently importing a column of nothing. Any other column is ignored, which is what makes the leftmost-match rule safe: these sheets repeat `Date`, `Day WC` and `Hours` further right in a derived rolling-average block, and the first occurrence of each is always the real one.
+
+Locating by name rather than position is what lets the derived block be ignored without hardcoding where it starts. It also means a writer can add columns of their own without breaking the import.
+
+`Type` is optional because a type belongs to a category, not to a row, so stating it once anywhere in the data is enough; blanks are ignored by the vote that resolves it. A category that is never typed anywhere aborts the import naming that category, so the data cannot produce a typeless category.
+
+A projects file requires `Project` and `Status`, where the status is `open`, `completed` or `abandoned`. It may also carry `Description`. A status is trimmed of surrounding whitespace and matched without regard to case, since the file is edited by hand and `Abandoned ` means what it says; an unrecognised value aborts the import naming the row, rather than guessing. A project named there but absent from every entries file is reported and skipped, since a project with no sessions has nothing to track; a project in the entries with no row in the projects file defaults to `open`. Every other column is ignored, which lets the file carry word counts, dates and categories as decision aids while it is being filled in without those becoming a second source of truth.
+
+`Category` is required as a header but may be blank on any individual row, for the same reason: a category belongs to the project, so stating it once is enough and the vote ignores blanks. This is what lets a supplementary file carry only the columns that change, naming projects that other files already categorise. A project with no category anywhere imports with a null `category_id` and is reported, appearing under `Uncategorized` in statistics rather than being dropped.
+
+A leading byte-order mark is stripped before headers are matched. Spreadsheet applications write one when saving UTF-8 CSV, and without stripping it the first header silently fails to match.
+
+A workbook supplies real date values. A CSV is parsed as ISO-8601 `YYYY-MM-DD` first, then as the month-first `MM/DD/YY` and `MM/DD/YYYY` that spreadsheet applications produce from a US locale. Month-first is genuinely ambiguous against day-first for the first twelve days of a month, so the importer reports the parsed date range for each file and the reader is expected to check it; ISO-8601 is the documented preference for anything typed by hand.
+
+### Rules
+
+Rows are skipped when they have no date, when `Day WC` and `Hours` are both zero or blank, or when `Project` is empty. The zero-work rule is what retires missed-day bookkeeping generically: a row recording no words and no time is not a session, whatever it is called, so no sentinel project name has to be recognised. A row with hours but no words is kept, because time spent without net new words is real work.
+
+A kept row recording less than the 0.25 hour minimum, including a session with words but no time at all, is raised to 0.25 and reported. Without this the schema's floor would abort the import of any journal that recorded a session as taking no time, which is a common way to log a drive-by edit. Raising rather than rejecting applies the same accounting rule the entry form enforces, and reporting it keeps the change visible instead of silently rewriting what the writer recorded. Two rows in this data were raised by hand in the spreadsheets before the rule existed, so the importer finds nothing left to raise.
+
+Either word-count column can drive an entry, and a writer will usually have only one of them to hand. `Day WC` is used directly when present. When it is blank, the session count is derived as the difference between this row's `Project WC` and the previous entry's `Project WC` for the same project in date order, which is the same arithmetic the spreadsheets encode as `=I3-I2` and the same model the entry form uses. Supporting the derivation matters because knowing a manuscript's running total is easier than counting new words across chapters, which is the premise the whole application rests on; requiring `Day WC` would mean doing that subtraction by hand before the import could read it.
+
+`Day WC` wins wherever both are present. Some projects have internal drift between their summed day counts and their `Project WC` series, because a Project WC can be reset mid-draft when a manuscript is restarted, so the two columns cannot both be honoured. The day counts are the record of work done, which is what the requirements ask to store.
+
+A project is identified by its title and matched across files, so a project spanning several years becomes one record. Its category is the majority vote of its rows' `Category` values, ignoring blanks, and each category's type is the majority vote of the `Type` values on rows carrying it. Voting rather than last-write-wins means a single mistyped row cannot move a project, and it degrades gracefully on a sheet that was never cleaned up.
+
+Nothing is stored for work predating the data. Where a project's earliest entry has a `Project WC` exceeding its `Day WC`, the difference is words written before tracking began; the importer reports each such project and the number rather than inventing an entry or a stored baseline, because the honest fix is to import the earlier journal. No spreadsheet column records pre-tracking hours at all, so a words-only baseline would have skewed every rate metric upward anyway, which is the second reason not to keep one.
+
+Project status comes from the projects file when one is present, and defaults to `open` otherwise. Nothing in a log of daily entries records whether a project was finished, and inferring it from staleness cannot tell a completed piece from an abandoned one, which is exactly the distinction that matters. An abandoned project keeps an end date, since the writer stopped on a known day, but is excluded from the completed count.
+
+The importer refuses to run against a non-empty database unless given `--reset`, so it cannot silently double-import, and it prints a report of what it created and skipped.
+
+### Preparing the sheets
+
+The three spreadsheets were normalized once to meet the contract above, by a script kept in the gitignored `historic_trackers/` directory alongside the data it describes. A fourth file, a CSV transposed from a 2023 paper journal, was added later and needed no normalizing beyond two corrections: a mistyped year that placed one row in 2026, and nineteen rows for early 2024 that had been transposed a second time and already existed in the 2024 workbook. It renamed the second `Project` header to `Category` so every needed column has a unique name, merged projects that had been tracked under two names, consolidated several one-day pieces into the projects they belong to, applied category renames, rewrote the `Type` column from each row's category so spelling and mislabelled rows were fixed in one pass, filled in three rows that had lost their project name, and made one merged project's `Project WC` column cumulative so the sheet stayed self-consistent.
+
+One finding from that work is worth recording, because it would be easy to repeat. These sheets store formulas as strings beginning `of:=`, where the `of` prefix lives inside an attribute value rather than an element name. A naive XML round-trip emits namespace declarations only for prefixes it sees on element and attribute names, so it drops `xmlns:of` and every formula in the workbook becomes `Err:510`. The normalizer splices the original root start tag back into its output and refuses to write a file that has lost a declaration. Any future tool that rewrites these files needs the same care.
+
+After normalization every category's type is decided unanimously, so the majority vote never has to break a tie on this data. It stays in the importer because another writer's sheets will not be as tidy.
+
+### Verification
+
+The normalized sheets were checked three ways before being installed: the derived `Stats` sheet converts byte-identically to the originals with zero formula errors, a field-level diff of the `Data` sheet shows changes confined to the `Project`, `Type`, `Category` and one project's `Project WC` columns with `Date`, `Day WC`, `Hours` and `Notes` untouched, and a simulated import reproduces the same word and hour totals as the untouched originals. Totals being unchanged is the point: the normalization moved labels, never work.
+
+### Expected import
+
+| | Entries | Words | Hours |
+| --- | --- | --- | --- |
+| 2023 | 124 | 34,261 | 56.00 |
+| 2024 | 320 | 244,148 | 314.00 |
+| 2025 | 207 | 186,457 | 220.00 |
+| 2026 | 3 | 1,799 | 3.00 |
+| Total | 654 | 466,665 | 593.00 |
+
+78 projects, 10 categories, 3 types. 239 rows skipped as no work logged, which covers both missed-day bookkeeping and blank future-dated rows. No project reports pre-tracking words, so every word and hour in the data belongs to a dated entry.
+
+| Category | Type | Projects | Words |
+| --- | --- | --- | --- |
+| SitR Book | Fiction | 9 | 265,419 |
+| Short Story | Fiction | 14 | 71,968 |
+| SitR Blog Post | Creative NF | 30 | 34,618 |
+| Other Book | Fiction | 2 | 33,355 |
+| SitR Short Story | Fiction | 8 | 33,176 |
+| Non-Fiction Book | Non-Fiction | 1 | 9,607 |
+| Non-Fiction Essays | Non-Fiction | 4 | 9,159 |
+| Kids Book | Fiction | 5 | 5,522 |
+| SitR Marketing | Non-Fiction | 1 | 2,570 |
+| Flash | Fiction | 4 | 1,271 |
+
+Every category's type resolves unanimously, so the majority vote never has to break a tie on this data. It stays in the importer because another writer's files will not be as tidy.
+
+Oddities carried through intact rather than cleaned, because they are real working days: five entries with a negative day count, and 26 entries recording time with no net words. Those 26 are a December streak on one project totalling 6.50 hours, and they are the reason words per hour has to tolerate a zero numerator as well as a zero denominator.
+
+85 days carry more than one entry, at most 4, and two days carry two entries for the same project, which the entry form supports.
+
+## Screens
+
+The app opens on the entry form, which is the daily path.
+
+**Entry** takes a date defaulting to today and accepting past or future, a project picked from the open list with a key to widen it to completed and abandoned projects too, since work does get picked back up, hours as a decimal of at least 0.25, and the project's current total word count. Session word count and words per hour are read-only and recalculate as you type. The session count is the typed total minus the sum of the project's existing entries. That reference is deliberately not date-ordered: the number you type is the manuscript's count right now, so it is measured against everything logged, which also means back-dating an entry needs no recalculation of anything. On a project's very first entry there is no prior total, so the form asks for the session count directly and labels it as such, which is how a manuscript started before tracking gets onto the books. A negative session count renders in the warning colour with the words cut spelled out, and submits normally.
+
+Hours has a floor of 0.25 and zero is refused: submitting with less is blocked, with the reason shown rather than the keystroke silently doing nothing. This is a deliberate accounting rule, not a guard against bad input. A minute spent is counted as fifteen for the purpose of a words-per-hour figure, because a session rounded down to nothing produces an undefined or absurd rate and misrepresents the day. Encoding it means the figure can never be distorted by a session that claims no time. All 654 imported entries already satisfy it, and every recorded value is a multiple of a quarter hour.
+
+**Entry history** lists recent entries with a project filter, and edits or deletes one. This is what makes a mistyped 20,000 recoverable, which is the case the requirements call out.
+
+**Projects** lists every project with the derived metrics above, creates and edits them, and cycles status. Editing covers title, category, status and description. Status cycles on a single key, which is what makes a review pass over 78 projects quick.
+
+**Categories** lists categories with their type and description, and creates or edits them. Types are managed here too, since there are four of them and a separate screen would be overkill.
+
+**Stats** is the dashboard, with Lifetime and the selected year as titled sections. The year selector is wired up in the MVP rather than deferred: the queries are year-parameterised anyway, so the only additional work is two keybindings, which is less effort than leaving a hardcoded year to remove later.
+
+Creating a project that is already complete and predates 2024 is out of scope.
+
+## Keybindings
+
+Leader is space. No control combinations are used anywhere.
+
+| Key | Action |
+| --- | --- |
+| `?` | help popup, context-aware per screen |
+| `<leader>e` / `<leader>h` / `<leader>p` / `<leader>c` / `<leader>s` | entry, history, projects, categories, stats |
+| `j` `k` `h` `l`, `gg`, `G` | movement |
+| `Tab` / `Shift-Tab` | next and previous field in a form |
+| `i` / `a`, `Esc` | begin and end editing a field |
+| `/`, `n`, `N` | filter a list and step matches |
+| `x` | cycle status on the projects list: open, completed, abandoned |
+| `dd` | delete, with a confirmation prompt |
+| `<leader><CR>` | submit a form |
+| `[` / `]` / `0` | previous year, next year, back to current year on stats |
+| `q` | quit, confirming when a form has unsaved input |
+
+Submit is `<leader><CR>`. The requirements originally asked for `Ctrl-Enter`, which predates the no-control rule added afterwards; `mvp_design_doc.md` has been updated to match, so nothing in the app binds a control combination and the keymap is portable across mac, linux and windows.
+
+## Theme
+
+Melange, mapped by role so the palette is referenced in one module rather than spread through the widgets.
+
+| Role | Colour |
+| --- | --- |
+| background | `a.bg` #292522 |
+| popup and float background | `a.float` #34302C |
+| selected row | `a.sel` #403A36 |
+| borders, inactive text | `a.ui` #867462 |
+| labels, secondary text | `a.com` #C1A78E |
+| primary text | `a.fg` #ECE1D7 |
+| focused border, accent | `b.cyan` #89B3B6 |
+| completed, positive | `b.green` #85B695 |
+| abandoned | `c.red` #BD8183 |
+| warning, negative session | `b.yellow` #EBC06D |
+| error | `b.red` #D47766 |
+| graph series rotation | `b.blue`, `b.magenta`, `b.cyan`, `b.yellow`, then the `c` row |
+
+Completed bars on the current-year projects graph are green as specified, which is why green is reserved and not part of the series rotation. Abandoned bars take the muted `c.red` rather than the brighter `b.red`, so abandoning a piece reads as a neutral outcome rather than an error.
+
+## Build sequence
+
+1. Cargo scaffold, schema, migrations, and the `rusqlite` access layer.
+2. Importer, validated by comparing its report against the dry-run figures above. Run against a scratch database via `--db` first.
+3. Entry form, including the session arithmetic and the negative case.
+4. Entry history with edit and delete.
+5. Projects and categories screens.
+6. Stats dashboard with year stepping.
+7. Help popup and theme pass.
+
+Each step after the first is independently usable, so the import can be checked against the spreadsheets before any of the UI exists.

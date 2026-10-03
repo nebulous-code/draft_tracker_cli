@@ -20,12 +20,12 @@ Projects should calculate their total word count based on the day word count sub
 Projects need the following metadata 
 - Title (required): Name of the project
 - Project Category: fk to Project Category below
-- Completed: is_completed boolean on the backend so I can indicate I'm done with the project 
+- Status: open, completed or abandoned, so I can indicate I'm done with a project or that I gave up on it without shipping 
 - Description: (optional) long from text entry
 
 Calculated Metadata that should be presented on the front end:
 - Start Date: first day with a writing entry
-- End Date: if is_completed == true then return last dated entry
+- End Date: if the status is completed or abandoned then return last dated entry
 - Total Word Count: running total of the project's word count
 - Days Written: The count of distinct days I've written on a project
 - Hours Written: The sum of the hours written on the project as a running total
@@ -43,10 +43,10 @@ A daily entry via the tui should consist of:
 - Date: The date I'm adding an entry for, default to today allow me to put in past/future dates
     - Assume I will put in multiple entries for any given day potentially for the same project (although it will be more common for me to do multiple projects in one day)
 - Project: selected from a list of not complete projects
-- Hours: The number of hours written, free form decimal in hours (.25 is 15 mins, etc)
+- Hours: The number of hours written, free form decimal in hours (.25 is 15 mins, etc). Minimum .25, and zero is not accepted: a minute spent counts as 15 for word count accounting.
 - Project Word Count: The total word count of the project Session Word Count: READ ONLY This is the difference between Project Word Count and the sum of past entries for the project to give me an idea of how much I've written for the day. This is what will be inserted into the database. It's not editable by me. But it should be presented incase I put in 20000 instead of 2000
 - Words per Hour: READ ONLY the session word count divided by the hours written. Should naturally normalize to per hour. So 100 words written for .25 hours should be 400 words per hour. 
-- Submit button: Short cut to ctrl + enter
+- Submit button: Short cut to <leader> + enter
 
 Stats:
 I would like a basic stats screen that accumulates across all projects. This should be at a year and lifetime level. I've put Lifetime and Current Year as prefixes but the KPIs should land in a clear section titled "Lifetime" or "Current Year" with just the rest of the field's title as the kpi header. Current year should be done off of the machine's date time.
@@ -62,6 +62,7 @@ Here's what I'm looking for:
 - Year over Year Word Count: A horizontal bar graph that shows the years on the left and total word count on the right with a bar graph between to visually compare
 - Current Year Project Category Word Count Distribution: this is a pie chart expressed through a single bar. It will find the total words written for the year and then divide each category's word count for the year by that to find a percentage and then fill in the bar by that percentage.
 
+Additional Note: I would like this dashboard written in a way so that the current year could be modified to show a previous year. Whether or not that is implemented in the mvp is up for discussion but I'd like the functionality and the way the backend queries are written to be year agnostic. 
 
 Navigation and Presentation
 
