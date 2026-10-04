@@ -190,6 +190,24 @@ Oddities carried through intact rather than cleaned, because they are real worki
 
 85 days carry more than one entry, at most 4, and two days carry two entries for the same project, which the entry form supports.
 
+## Logging from the command line
+
+The interface is for reviewing, fixing and planning. Logging a day's work is one short command, and a writer with this binary on their path should not have to open a screen to do the thing they do every day:
+
+```
+draft-tracker log fireside 17900 1 -n "a good morning"
+```
+
+The project is matched on any part of its title, without regard to case, against the open projects. An exact title wins outright, so a project whose name is contained in another's is still reachable: without that rule `Flask` could never be named while `Flask Vol 1` existed. A fragment matching several projects is refused with the candidates listed, because guessing which project a day's work belongs to is not a thing to do quietly. A fragment matching nothing lists the open projects, and a fragment matching only a finished one says so rather than claiming the project does not exist, since that is the more useful answer; `--any` logs against it anyway.
+
+The word count is the project's new running total, and the session is derived from it exactly as on the entry form, including taking the number as the session itself on a project's first entry. The hours floor applies, and is checked before the project is resolved so that a message about hours is not buried behind one about a name.
+
+Nothing is written until the entry has been shown and agreed to. The summary carries the reference total as well as the session, so a surprising figure can be reasoned about before it is saved rather than after. There is no editing at the prompt: the answer is yes or no, and running the command again costs nothing.
+
+The answer is read from whatever stdin is, so piping one in works for a script. End of input is treated as neither yes nor no but as not having been asked, and refuses with a pointer to `--yes`: a writer who answered nothing has not declined. `--yes` saves without asking, for a cron job or an alias.
+
+`status` lists the open projects and their totals, because logging from the command line needs their names and a dashboard cannot be read from a pipe.
+
 ## Screens
 
 The app opens on the entry form, which is the daily path.
