@@ -101,6 +101,18 @@ impl Db {
         &mut self.conn
     }
 
+    /// A counter that changes when *another* connection commits.
+    ///
+    /// SQLite leaves it alone for this connection's own writes, so comparing it
+    /// against a remembered value answers exactly one question: has somebody
+    /// else changed the database since I last looked. That is what a second
+    /// session in another terminal amounts to.
+    pub fn data_version(&self) -> Result<i64, DbError> {
+        Ok(self
+            .conn
+            .query_row("PRAGMA data_version", [], |row| row.get(0))?)
+    }
+
     pub fn schema_version(&self) -> Result<i64, DbError> {
         migrations::current_version(&self.conn)
     }

@@ -190,6 +190,18 @@ Oddities carried through intact rather than cleaned, because they are real worki
 
 85 days carry more than one entry, at most 4, and two days carry two entries for the same project, which the entry form supports.
 
+## A second session
+
+The command line writes entries, so two connections against one database is the ordinary case rather than an edge. The database copes: WAL allows a writer alongside readers, there is a five second busy timeout, and a write from the command line lands while an interface is open. That was checked against a held-open connection rather than assumed.
+
+What does not cope on its own is the interface's cached figures. A session count is the difference between what the writer typed and what the project already holds, so a total that went stale while the screen was open inflates the next entry without complaint: with 17,228 cached and 17,900 actually logged, typing the true 18,000 computes 772 where the answer is 100. The entry is wrong, nothing reports it, and the writer finds out weeks later looking at a day that reads oddly.
+
+`PRAGMA data_version` answers exactly the needed question. SQLite leaves it alone for the connection's own writes and changes it when another connection commits, so comparing it against a remembered value asks "has somebody else changed this since I last looked" and nothing else. That it ignores one's own writes was verified, because the whole design rests on it: were it otherwise, every second entry of the day would be refused for no reason.
+
+It is checked at two moments rather than continuously: changing screen, and submitting an entry. Those are the points at which the cached figures are about to be read or written against, and polling between them would buy nothing that checking at the point of use does not.
+
+On a screen change the data is reloaded and the writer told. On a submit the data is reloaded and the submit refused once, which matters more than it looks: the recalculated session goes on screen so that the number written is a number the writer has seen. Silently correcting 772 to 100 would be right about the arithmetic and wrong about consent, and the one thing worse than a figure the writer did not expect is a different figure they never saw.
+
 ## Logging from the command line
 
 The interface is for reviewing, fixing and planning. Logging a day's work is one short command, and a writer with this binary on their path should not have to open a screen to do the thing they do every day:

@@ -1,14 +1,14 @@
 [package]
 name = "draft_tracker"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 description = "Track writing sessions, projects and word counts in a terminal UI backed by SQLite"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/nebulous-code/draft_tracker"
+keywords = ["writing", "tui", "sqlite", "wordcount"]
+categories = ["command-line-utilities"]
 default-run = "draft-tracker"
-
-# No license or repository declared yet: a license is a legal statement and is
-# the author's to choose, so it is left unset rather than guessed. Both fields,
-# plus a README, are needed before this is published.
-publish = false
 
 [[bin]]
 name = "draft-tracker"
@@ -27,3 +27,16 @@ dirs = "7.0.0"
 ratatui = "0.30.2"
 rusqlite = { version = "0.40.2", features = ["bundled", "chrono"] }
 thiserror = "2.0.21"
+
+[profile.release]
+# Whole-program optimization and a single codegen unit: this is a tool built
+# occasionally and run for years, so a slower build for a faster, smaller binary
+# is the right trade. Symbols are stripped because nothing here gets debugged
+# from a core dump.
+lto = true
+codegen-units = 1
+strip = "symbols"
+# `panic = "abort"` is deliberately not set. The terminal is restored by a panic
+# hook, which would still run, but aborting skips every destructor including the
+# SQLite connection's, and a writing log is not worth that risk to save a few
+# kilobytes.

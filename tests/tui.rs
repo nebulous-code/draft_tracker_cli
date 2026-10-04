@@ -2636,3 +2636,229 @@ fn show_the_leader_menu() {
         println!("|{line}");
     }
 }
+
+// ==================================================== a second session writing
+
+/// A database on disk, so two connections can exist at once.
+struct TempDb(std::path::PathBuf);
+
+impl TempDb {
+    fn new(label: &str) -> Self {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("dt_{label}_{}_{n}.db", std::process::id()));
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+        Self(path)
+    }
+
+    fn open(&self) -> Db {
+        Db::open(&self.0).unwrap()
+    }
+}
+
+impl Drop for TempDb {
+    fn drop(&mut self) {
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", self.0.display()));
+        }
+    }
+}
+
+/// One project with 17,228 words logged, and an app already looking at it.
+fn app_on_disk(temp: &TempDb) -> App {
+    {
+        let db = temp.open();
+        let id = repo::insert_project(db.conn(), "Fireside 1", None, Status::Open, None).unwrap();
+        repo::insert_entry(
+            db.conn(),
+            &NewEntry {
+                entry_date: day(2026, 1, 12),
+                project_id: id,
+                session_word_count: 17_228,
+                hours: 20.0,
+                notes: None,
+            },
+        )
+        .unwrap();
+    }
+    App::new(temp.open()).unwrap()
+}
+
+/// Simulate the command line, or a second interface, on its own connection.
+fn other_session_logs(temp: &TempDb, words: i64) {
+    let other = temp.open();
+    let id = repo::project_id_by_title(other.conn(), "Fireside 1")
+        .unwrap()
+        .unwrap();
+    repo::insert_entry(
+        other.conn(),
+        &NewEntry {
+            entry_date: day(2026, 10, 3),
+            project_id: id,
+            session_word_count: words,
+            hours: 1.0,
+            notes: None,
+        },
+    )
+    .unwrap();
+}
+
+fn type_into(app: &mut App, field: Field, text: &str) {
+    focus(app, field);
+    app.on_key(ch('i')).unwrap();
+    type_str(app, text);
+    app.on_key(key(KeyCode::Esc)).unwrap();
+}
+
+/// The scenario: an interface left open in one terminal while a session is
+/// logged from another. The session count is a difference against the project's
+/// total, so a stale total would inflate it without complaint.
+#[test]
+fn a_submit_against_a_stale_total_is_refused_and_recalculated() {
+    let temp = TempDb::new("stale");
+    let mut app = app_on_disk(&temp);
+    select_title(&mut app, "Fireside 1");
+    assert_eq!(app.form.selected_project().unwrap().logged_words, 17_228);
+
+    other_session_logs(&temp, 672);
+
+    // The writer types the manuscript's true new total, expecting 100 words.
+    type_into(&mut app, Field::Hours, "1");
+    type_into(&mut app, Field::ProjectWords, "18000");
+    // Against the stale total this previews 772, which is the bug being guarded.
+    assert_eq!(app.form.preview().session_words, Some(772));
+
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+
+    let flash = app.flash.as_ref().expect("a warning");
+    assert_eq!(flash.tone, Tone::Warning);
+    assert!(
+        flash.text.contains("another session"),
+        "got {:?}",
+        flash.text
+    );
+    assert_eq!(
+        repo::recent_entries(app.db.conn(), 10).unwrap().len(),
+        2,
+        "the refused submit wrote nothing"
+    );
+    // The figures now reflect reality, and the number on screen is the number
+    // that would be written.
+    assert_eq!(app.form.selected_project().unwrap().logged_words, 17_900);
+    assert_eq!(app.form.preview().session_words, Some(100));
+}
+
+#[test]
+fn submitting_again_writes_the_corrected_session() {
+    let temp = TempDb::new("corrected");
+    let mut app = app_on_disk(&temp);
+    select_title(&mut app, "Fireside 1");
+    other_session_logs(&temp, 672);
+    type_into(&mut app, Field::Hours, "1");
+    type_into(&mut app, Field::ProjectWords, "18000");
+
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap(); // refused, recalculated
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap(); // accepted
+
+    assert_eq!(app.flash.as_ref().unwrap().tone, Tone::Success);
+    let entries = repo::recent_entries(app.db.conn(), 10).unwrap();
+    assert_eq!(entries.len(), 3);
+    assert!(
+        entries.iter().any(|e| e.session_word_count == 100),
+        "the written session is the corrected one: {entries:?}"
+    );
+    assert!(
+        !entries.iter().any(|e| e.session_word_count == 772),
+        "the inflated figure must never reach the database"
+    );
+    assert_eq!(
+        repo::project_logged_total(app.db.conn(), 1).unwrap(),
+        18_000
+    );
+}
+
+/// The check must not fire on this session's own writes, or every second entry
+/// of the day would be refused once for no reason.
+#[test]
+fn two_submits_in_a_row_are_not_mistaken_for_outside_interference() {
+    let temp = TempDb::new("own");
+    let mut app = app_on_disk(&temp);
+    select_title(&mut app, "Fireside 1");
+
+    type_into(&mut app, Field::Hours, "1");
+    type_into(&mut app, Field::ProjectWords, "17500");
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+    assert_eq!(
+        app.flash.as_ref().unwrap().tone,
+        Tone::Success,
+        "first submit"
+    );
+
+    select_title(&mut app, "Fireside 1");
+    type_into(&mut app, Field::Hours, "1");
+    type_into(&mut app, Field::ProjectWords, "18000");
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+    assert_eq!(
+        app.flash.as_ref().unwrap().tone,
+        Tone::Success,
+        "a second submit must go straight through: {:?}",
+        app.flash
+    );
+    assert_eq!(
+        repo::project_logged_total(app.db.conn(), 1).unwrap(),
+        18_000
+    );
+}
+
+#[test]
+fn changing_screen_picks_up_what_another_session_wrote() {
+    let temp = TempDb::new("screen");
+    let mut app = app_on_disk(&temp);
+    to_history(&mut app);
+    assert_eq!(app.history.visible().len(), 1);
+
+    other_session_logs(&temp, 672);
+
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(ch('p')).unwrap();
+    assert_eq!(app.screen, Screen::Projects);
+    assert!(
+        app.flash.as_ref().unwrap().text.contains("another session"),
+        "got {:?}",
+        app.flash
+    );
+    assert_eq!(
+        app.projects
+            .visible()
+            .iter()
+            .find(|r| r.project.title == "Fireside 1")
+            .unwrap()
+            .metrics
+            .total_word_count,
+        17_900
+    );
+
+    to_history(&mut app);
+    assert_eq!(app.history.visible().len(), 2, "the new entry is listed");
+}
+
+#[test]
+fn changing_screen_says_nothing_when_nothing_changed_outside() {
+    let temp = TempDb::new("quiet");
+    let mut app = app_on_disk(&temp);
+    to_history(&mut app);
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(ch('p')).unwrap();
+    assert!(
+        app.flash.is_none(),
+        "no news is not worth a message: {:?}",
+        app.flash
+    );
+}

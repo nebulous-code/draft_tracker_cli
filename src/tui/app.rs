@@ -82,6 +82,12 @@ pub struct App {
     pending_g: bool,
     /// `q` was pressed with unsaved input and is waiting for confirmation.
     pub confirming_quit: bool,
+    /// The database's `data_version` as of the last time everything was loaded.
+    ///
+    /// Checked when it matters rather than continuously: changing screen, and
+    /// submitting an entry. Those are the moments the cached figures are about
+    /// to be read or written against, and polling in between would buy nothing.
+    last_data_version: i64,
 }
 
 impl App {
@@ -100,6 +106,7 @@ impl App {
             repo::list_types_with_usage(db.conn())?,
         );
         let stats = Stats::load(&db)?;
+        let last_data_version = db.data_version()?;
         Ok(Self {
             db,
             screen: Screen::Entry,
@@ -115,7 +122,23 @@ impl App {
             leader_hint: false,
             pending_g: false,
             confirming_quit: false,
+            last_data_version,
         })
+    }
+
+    /// Reload if another session has committed since the last look.
+    ///
+    /// Returns whether anything was reloaded, so a caller can decide what to do
+    /// about it. A second terminal is the ordinary case here, not an edge: the
+    /// command line writes entries too.
+    fn adopt_external_changes(&mut self) -> Result<bool> {
+        let current = self.db.data_version()?;
+        if current == self.last_data_version {
+            return Ok(false);
+        }
+        self.last_data_version = current;
+        self.reload_everything()?;
+        Ok(true)
     }
 
     fn set_flash(&mut self, tone: Tone, text: impl Into<String>) {
@@ -233,6 +256,10 @@ impl App {
                 self.set_flash(Tone::Warning, "edit discarded");
             }
         }
+        // Another session may have changed things since this one last looked.
+        if self.adopt_external_changes()? {
+            self.set_flash(Tone::Info, "another session changed the log; reloaded");
+        }
         // Reload whatever the screen shows: another screen may have changed it.
         match screen {
             Screen::History => self.reload_history()?,
@@ -273,6 +300,7 @@ impl App {
         self.reload_projects()?;
         self.reload_categories()?;
         self.stats.reload(&self.db)?;
+        self.last_data_version = self.db.data_version()?;
         Ok(())
     }
 
@@ -373,7 +401,21 @@ impl App {
     }
 
     /// Write the entry, or report everything stopping it.
+    ///
+    /// A session count is the difference between what the writer typed and what
+    /// the project already holds, so a stale total silently inflates it. If
+    /// another session has written since this one loaded, the figures are
+    /// refreshed and the submit is refused once: the recalculated session is put
+    /// on screen so that the number written is a number the writer has seen.
     fn submit_entry(&mut self) -> Result<()> {
+        if self.adopt_external_changes()? {
+            self.set_flash(
+                Tone::Warning,
+                "another session added work; the figures have been recalculated, \
+                 check them and submit again",
+            );
+            return Ok(());
+        }
         match self.form.to_new_entry() {
             Err(problems) => self.flash_problems(problems.iter().map(|p| p.to_string())),
             Ok(entry) => {
