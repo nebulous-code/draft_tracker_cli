@@ -12,6 +12,8 @@ pub mod theme;
 
 use std::io::IsTerminal;
 
+use std::time::Duration;
+
 use anyhow::{Context, Result, bail};
 use ratatui::crossterm::event::{self, Event};
 
@@ -37,12 +39,26 @@ pub fn run(db: Db) -> Result<()> {
     result
 }
 
+/// How long the leader key waits before showing its menu.
+///
+/// Short enough to feel immediate, long enough that a sequence typed at speed
+/// never flashes a popup. Zero would show it on every press, including the
+/// hundreds of `<leader><CR>` submissions where it would only flicker.
+const LEADER_HINT_DELAY: Duration = Duration::from_millis(50);
+
 fn event_loop(terminal: &mut ratatui::DefaultTerminal, db: Db) -> Result<()> {
     let mut app = App::new(db)?;
     loop {
         terminal.draw(|frame| draw::draw(frame, &mut app))?;
-        // A blocking read: nothing changes on its own, so there is no reason to
-        // wake up and redraw on a timer.
+
+        // Nothing changes on its own, so the loop blocks on input. The one
+        // exception is a pending leader key, which turns into a menu if the
+        // writer pauses rather than carrying straight on.
+        if app.leader_pending && !app.leader_hint && !event::poll(LEADER_HINT_DELAY)? {
+            app.leader_hint = true;
+            continue;
+        }
+
         match event::read()? {
             Event::Key(key) => {
                 if app.on_key(key)? == Flow::Quit {

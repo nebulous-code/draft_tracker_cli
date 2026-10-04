@@ -256,6 +256,16 @@ The category bar hands out its cells largest-remainder first, so the segments ad
 
 Creating a project that is already complete and predates 2024 is out of scope.
 
+## The leader menu
+
+Holding the leader key without following it shows a menu of what it can be followed by. Pressing leader is the moment the question arises, so that is when the answer belongs on screen, and a writer should not have to remember a second key to ask.
+
+It lists only the leader sequences. At that moment the question is what this prefix does, and the full reference would bury the answer among two dozen keys that have nothing to do with the prefix; `<leader>?` opens the full reference from there. The Enter line names what submitting would do on the screen in hand, since it means something different on each.
+
+The menu waits a short pause before appearing rather than arriving the instant leader is pressed. A menu that appears and vanishes inside a fast `<leader><CR>` is a flicker, not help, and submitting an entry is the most repeated action in the application. One hundred milliseconds reads as immediate while still being long enough that a sequence typed at speed never flashes it; the delay is a single constant in the event loop, and zero would make it appear on every press.
+
+The menu does not swallow the key that dismisses it, which the full help deliberately does. The full help is opened to be read, so the keystroke that closes it is about closing it. The leader menu is shown while a sequence is half-finished, so the next key is the rest of that sequence and has to reach it.
+
 ## Keybindings
 
 Leader is space. No control combinations are used anywhere.
@@ -263,6 +273,8 @@ Leader is space. No control combinations are used anywhere.
 | Key | Action |
 | --- | --- |
 | `?` | help popup, context-aware per screen |
+| `<leader>` alone | after a short pause, a menu of what leader can be followed by |
+| `<leader>?` | the full help from the leader menu |
 | `<leader>e` / `<leader>h` / `<leader>p` / `<leader>c` / `<leader>s` | entry, history, projects, categories, stats |
 | `j` `k`, `gg`, `G` | movement; in any form `j` and `k` walk between fields, like `Tab` |
 | `h` / `l` | step a choice field: the entry form's project, a project's category and status, a category's type; switch pane on the categories screen |

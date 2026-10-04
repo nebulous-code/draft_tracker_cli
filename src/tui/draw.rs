@@ -49,8 +49,11 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     }
     draw_status(frame, app, status_area);
 
+    // The full reference wins if both are somehow pending.
     if app.help_visible {
         draw_help(frame, app, area);
+    } else if app.leader_hint {
+        draw_leader_menu(frame, app, area);
     }
 }
 
@@ -1491,6 +1494,68 @@ fn draw_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(spans)).style(theme::base()), area);
 }
 
+/// A popup centred in `area`, sized to its own content.
+fn popup(area: Rect, lines: &[Line<'_>], padding: u16) -> Rect {
+    let widest = lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.chars().count())
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(0) as u16;
+    let width = (widest + padding).min(area.width.saturating_sub(2)).max(24);
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+    let [centred] = Layout::horizontal([Constraint::Length(width)])
+        .flex(Flex::Center)
+        .areas(area);
+    let [centred] = Layout::vertical([Constraint::Length(height)])
+        .flex(Flex::Center)
+        .areas(centred);
+    centred
+}
+
+/// The menu of leader continuations, shown when leader is left pending.
+///
+/// Only the leader sequences: at that moment the question is what this prefix
+/// does, and listing every other key would bury the answer.
+fn draw_leader_menu(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let bindings = help::leader_bindings(app.screen);
+    let key_width = bindings
+        .iter()
+        .map(|(k, _)| k.len())
+        .max()
+        .unwrap_or(0)
+        .max(5);
+
+    let lines: Vec<Line<'_>> = bindings
+        .iter()
+        .map(|(key, description)| {
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(format!("{key:<key_width$}"), Style::new().fg(theme::YELLOW)),
+                Span::raw("  "),
+                Span::styled(*description, Style::new().fg(theme::FG)),
+            ])
+        })
+        .collect();
+
+    let target = popup(area, &lines, 4);
+    frame.render_widget(Clear, target);
+    frame.render_widget(
+        Paragraph::new(lines).style(theme::float()).block(
+            Block::bordered()
+                .title(" <leader> ")
+                .border_style(theme::focused())
+                .title_style(theme::focused())
+                .style(theme::float()),
+        ),
+        target,
+    );
+}
+
 fn draw_help(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let sections = help::sections(app.screen);
     let key_width = help::widest_key(&sections).max(8);
@@ -1516,27 +1581,9 @@ fn draw_help(frame: &mut Frame<'_>, app: &App, area: Rect) {
         theme::hint(),
     )));
 
-    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
     // Sized to its content: a help popup that truncates the binding it is
     // explaining is worse than no popup.
-    let widest_line = lines
-        .iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|s| s.content.chars().count())
-                .sum::<usize>()
-        })
-        .max()
-        .unwrap_or(0) as u16;
-    let width = (widest_line + 4).min(area.width.saturating_sub(2)).max(24);
-    let [popup] = Layout::horizontal([Constraint::Length(width)])
-        .flex(Flex::Center)
-        .areas(area);
-    let [popup] = Layout::vertical([Constraint::Length(height)])
-        .flex(Flex::Center)
-        .areas(popup);
-
+    let popup = popup(area, &lines, 4);
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(lines).style(theme::float()).block(

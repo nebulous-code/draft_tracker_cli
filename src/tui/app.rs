@@ -72,6 +72,12 @@ pub struct App {
     pub help_visible: bool,
     /// The leader key has been pressed and the next key completes a sequence.
     pub leader_pending: bool,
+    /// Whether to draw the menu of leader continuations.
+    ///
+    /// Set by the event loop once the writer has paused, rather than the instant
+    /// leader is pressed: a menu that appears and vanishes inside a fast
+    /// `<leader><CR>` is a flicker, not help.
+    pub leader_hint: bool,
     /// `g` has been pressed, waiting for a second one.
     pending_g: bool,
     /// `q` was pressed with unsaved input and is waiting for confirmation.
@@ -106,6 +112,7 @@ impl App {
             flash: None,
             help_visible: false,
             leader_pending: false,
+            leader_hint: false,
             pending_g: false,
             confirming_quit: false,
         })
@@ -165,6 +172,7 @@ impl App {
 
         if self.leader_pending {
             self.leader_pending = false;
+            self.leader_hint = false;
             return self.on_leader(key);
         }
 
@@ -194,6 +202,12 @@ impl App {
             KeyCode::Char('p') => self.go(Screen::Projects),
             KeyCode::Char('c') => self.go(Screen::Categories),
             KeyCode::Char('s') => self.go(Screen::Stats),
+            // Asking for help from the leader menu opens the full reference
+            // rather than reporting an unbound key.
+            KeyCode::Char('?') => {
+                self.help_visible = true;
+                Ok(Flow::Continue)
+            }
             KeyCode::Esc => Ok(Flow::Continue),
             other => {
                 self.set_flash(

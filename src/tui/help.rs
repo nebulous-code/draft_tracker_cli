@@ -96,6 +96,34 @@ const STATS: Section = Section {
     ],
 };
 
+/// What `<leader>` can be followed by, for the menu shown while it is pending.
+///
+/// Only the leader sequences: at that moment the question is "what does this
+/// prefix do", and listing every other key would bury the answer. `?` from here
+/// opens the full reference.
+pub fn leader_bindings(screen: Screen) -> Vec<(&'static str, &'static str)> {
+    let submit = match screen {
+        Screen::Entry => Some("submit this entry"),
+        Screen::History => Some("save the open edit"),
+        Screen::Projects => Some("save the open project"),
+        Screen::Categories => Some("save the open record"),
+        Screen::Stats => None,
+    };
+    let mut bindings = vec![
+        ("e", "entry"),
+        ("h", "entry history"),
+        ("p", "projects"),
+        ("c", "categories"),
+        ("s", "stats"),
+    ];
+    if let Some(submit) = submit {
+        bindings.push(("Enter", submit));
+    }
+    bindings.push(("?", "every key for this screen"));
+    bindings.push(("Esc", "never mind"));
+    bindings
+}
+
 pub fn sections(screen: Screen) -> Vec<&'static Section> {
     let screen_section = match screen {
         Screen::Entry => &ENTRY,

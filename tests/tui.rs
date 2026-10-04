@@ -2513,3 +2513,126 @@ fn the_status_bar_fits_on_every_screen() {
         );
     }
 }
+
+// ============================================================ the leader menu
+
+#[test]
+fn the_leader_menu_lists_what_leader_can_be_followed_by() {
+    let mut app = app_with_history();
+    app.on_key(ch(' ')).unwrap();
+    assert!(app.leader_pending);
+    // The event loop decides when to show it; the draw only honours the flag.
+    assert!(!app.leader_hint, "not until the writer has paused");
+
+    app.leader_hint = true;
+    let screen = render(&mut app, 90, 24).join("\n");
+    assert!(screen.contains("<leader>"), "got:\n{screen}");
+    for expected in [
+        "entry history",
+        "projects",
+        "categories",
+        "stats",
+        "submit this entry",
+    ] {
+        assert!(
+            screen.contains(expected),
+            "{expected:?} missing from:\n{screen}"
+        );
+    }
+    assert!(
+        screen.contains("every key for this screen"),
+        "got:\n{screen}"
+    );
+}
+
+#[test]
+fn the_leader_menu_names_what_enter_would_do_on_this_screen() {
+    let mut app = app_with_history();
+    to_history(&mut app);
+    app.on_key(ch('i')).unwrap();
+    app.on_key(ch(' ')).unwrap();
+    app.leader_hint = true;
+    let screen = render(&mut app, 90, 24).join("\n");
+    assert!(screen.contains("save the open edit"), "got:\n{screen}");
+    assert!(!screen.contains("submit this entry"), "got:\n{screen}");
+}
+
+#[test]
+fn a_leader_sequence_still_works_while_the_menu_is_showing() {
+    let mut app = app_with_history();
+    app.on_key(ch(' ')).unwrap();
+    app.leader_hint = true;
+    // The menu must not swallow the key the way the full help does.
+    app.on_key(ch('p')).unwrap();
+    assert_eq!(app.screen, Screen::Projects);
+    assert!(
+        !app.leader_hint,
+        "the menu goes once the sequence completes"
+    );
+    assert!(!app.leader_pending);
+}
+
+#[test]
+fn escape_dismisses_the_leader_menu_without_doing_anything() {
+    let mut app = app_with_history();
+    let before = app.screen;
+    app.on_key(ch(' ')).unwrap();
+    app.leader_hint = true;
+    app.on_key(key(KeyCode::Esc)).unwrap();
+    assert!(!app.leader_pending);
+    assert!(!app.leader_hint);
+    assert_eq!(app.screen, before);
+    assert!(app.flash.is_none(), "cancelling is not worth a message");
+}
+
+#[test]
+fn leader_question_mark_opens_the_full_reference() {
+    let mut app = app_with_history();
+    app.on_key(ch(' ')).unwrap();
+    app.leader_hint = true;
+    app.on_key(ch('?')).unwrap();
+    assert!(app.help_visible);
+    assert!(!app.leader_hint);
+    let screen = render(&mut app, 90, 30).join("\n");
+    assert!(
+        screen.contains("Keys"),
+        "the full reference, not the menu:\n{screen}"
+    );
+    assert!(
+        screen.contains("No binding uses a control key."),
+        "got:\n{screen}"
+    );
+}
+
+#[test]
+fn the_full_help_takes_precedence_over_the_leader_menu() {
+    let mut app = app_with_history();
+    app.help_visible = true;
+    app.leader_hint = true;
+    let screen = render(&mut app, 90, 30).join("\n");
+    assert!(screen.contains("Keys"), "got:\n{screen}");
+    assert!(
+        !screen.contains("every key for this screen"),
+        "only one popup:\n{screen}"
+    );
+}
+
+#[test]
+fn an_unbound_leader_key_still_reports_itself() {
+    let mut app = app_with_history();
+    app.on_key(ch(' ')).unwrap();
+    app.leader_hint = true;
+    app.on_key(ch('z')).unwrap();
+    assert!(app.flash.as_ref().unwrap().text.contains("not bound"));
+    assert!(!app.leader_hint);
+}
+
+#[test]
+fn show_the_leader_menu() {
+    let mut app = app_with_history();
+    app.on_key(ch(' ')).unwrap();
+    app.leader_hint = true;
+    for line in render(&mut app, 76, 18) {
+        println!("|{line}");
+    }
+}
