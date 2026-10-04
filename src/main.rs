@@ -11,6 +11,25 @@ use draft_tracker::db::{Db, stats};
 use draft_tracker::import::{self, Existing};
 use draft_tracker::tui;
 
+/// Version, the commit it was built from, and which profile.
+///
+/// All three matter when a binary has been installed as a copy: the version says
+/// what it is, the commit says exactly which source, the dirty marker says
+/// whether uncommitted work went in, and the profile distinguishes an installed
+/// build from one being run out of a working tree.
+fn version() -> String {
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    format!(
+        "draft-tracker {} ({}, {profile})",
+        env!("CARGO_PKG_VERSION"),
+        env!("DRAFT_TRACKER_COMMIT"),
+    )
+}
+
 const USAGE: &str = "\
 draft-tracker - track writing sessions, projects and word counts
 
@@ -20,6 +39,7 @@ Usage:
   draft-tracker [--db <path>] status
   draft-tracker [--db <path>] import <dir> [--reset] [--dry-run]
   draft-tracker --help
+  draft-tracker --version
 
 Logging a session:
   <project>     all or part of an open project's title, case insensitive
@@ -37,6 +57,7 @@ Options:
   --reset       let import replace data already in the database
   --dry-run     let import report what it would do, writing nothing
   --help, -h    show this message
+  --version, -V show the version and the commit it was built from
 
 With no command, the terminal interface opens on the entry form.
 ";
@@ -75,6 +96,7 @@ struct Args {
     date: Option<String>,
     notes: Option<String>,
     help: bool,
+    version: bool,
 }
 
 fn parse_args() -> Result<Args> {
@@ -86,6 +108,7 @@ fn parse_args() -> Result<Args> {
         };
         match arg.as_str() {
             "--help" | "-h" => args.help = true,
+            "--version" | "-V" => args.version = true,
             "--db" => args.db = Some(PathBuf::from(value("--db")?)),
             "--reset" => args.reset = true,
             "--dry-run" => args.dry_run = true,
@@ -112,6 +135,11 @@ fn is_negative_number(arg: &str) -> bool {
 
 fn run() -> Result<ExitCode> {
     let args = parse_args()?;
+    if args.version {
+        let mut out = io::stdout().lock();
+        writeln!(out, "{}", version())?;
+        return Ok(ExitCode::SUCCESS);
+    }
     if args.help {
         let mut out = io::stdout().lock();
         out.write_all(USAGE.as_bytes())?;

@@ -108,7 +108,7 @@ Colours follow [melange](https://github.com/savq/melange-nvim) and assume a term
 Needs a Rust toolchain. SQLite is compiled in, so there is nothing else to install.
 
 ```sh
-git clone https://github.com/[GITHUB_USERNAME]/draft_tracker
+git clone https://github.com/nebulous-code/draft_tracker
 cd draft_tracker
 cargo install --path .
 ```
@@ -136,6 +136,8 @@ The word count is the project's new running total. On a project's first entry th
 | `-y`, `--yes` | save without asking |
 | `--any` | allow a completed or abandoned project |
 | `--db <path>` | use a different database |
+
+`draft-tracker --version` reports the version, the commit it was built from and whether that build included uncommitted changes, which is the quickest way to tell whether an installed copy is the build you think it is.
 
 Nothing is written until the entry has been shown and agreed to. The answer is read from whatever standard input is, so piping one in works; `--yes` is for a script.
 
