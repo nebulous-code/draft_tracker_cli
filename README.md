@@ -119,6 +119,17 @@ That puts `draft-tracker` on your path. An alias is worth having for something t
 alias dt='draft-tracker'
 ```
 
+## Trying it first
+
+There is a generator for a database of invented writing, so you can see what the program looks like with four years of work in it before committing any of your own:
+
+```sh
+cargo run --example demo_data -- /tmp/demo.db
+cargo run -- --db /tmp/demo.db
+```
+
+Eighteen projects, 149 sessions, about 172,000 words. It includes the awkward cases on purpose, so you can see how they are handled: a revision day that removes words, a session that logged time without gaining any, a project running from one year into the next, and one that was abandoned. Delete the file when you are done; nothing else on your system is touched.
+
 ## Logging a session
 
 ```sh

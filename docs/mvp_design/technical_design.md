@@ -6,7 +6,7 @@ Companion to `mvp_design_doc.md`, which holds the requirements. This file record
 
 Rust, with `ratatui` over `crossterm` for the TUI and `rusqlite` (with the `bundled` feature) for storage. Bundling SQLite means the binary has no system library dependency, which matters because this is a personal tool that should keep working after an OS upgrade. Nothing here needs async, so there is no runtime.
 
-The importer reads `.ods` with `calamine`, which handles the OpenDocument repeated-row and repeated-column encodings that these files use heavily. That encoding is the one real risk in the import, so validating `calamine` against the actual files is the first task in the build sequence rather than an assumption baked into later work. The fallback, if it mishandles them, is a direct `zip` + `quick-xml` read of `content.xml`, which is already proven out: the expected-import figures below came from exactly that approach.
+The importer reads `.ods` with `calamine`. The OpenDocument repeated-row and repeated-column encodings, which these sheets use heavily, were the one real risk, so `calamine` was checked against the actual files before anything was built on it: it read 383, 383 and 3 dated rows from the three workbooks, matching an independent parse exactly. The fallback had been a direct `zip` and `quick-xml` read of `content.xml`, and it was not needed.
 
 The importer ships as a subcommand, `draft-tracker import <dir>`, not a standalone script. It needs the same schema and the same project-and-category resolution logic as the app, and a subcommand shares that code instead of duplicating it in a second language that could drift. It is reusable by any writer whose journal meets the input contract below, and contains no project-specific rules.
 
@@ -274,7 +274,7 @@ Deleting is refused while anything still points at the record, naming how many p
 
 A field whose value comes from a fixed set, a project's category and status and a category's type, steps with `h` and `l` rather than being typed. Pressing `i` on such a field says so instead of appearing to do nothing.
 
-**Stats** is the dashboard, with Lifetime and the selected year as titled sections. The year selector is wired up in the MVP rather than deferred: the queries are year-parameterised anyway, so the only additional work is two keybindings, which is less effort than leaving a hardcoded year to remove later. Each section also carries a words-per-hour figure, since it costs nothing to divide two numbers already on screen.
+**Stats** is the dashboard, with Lifetime and the selected scope as titled sections. The year selector was built rather than deferred: the queries take an optional year anyway, so it cost two keybindings, which was less work than leaving a hardcoded year to remove afterwards. Each section also carries a words-per-hour figure, since it costs nothing to divide two numbers already on screen.
 
 All time sits at the end of the sequence of years, so the selection walks 2023, 2024, 2025, 2026, all time. `j` and `k` move through it, which is the pairing the eye expects when the years are drawn stacked vertically; `[` and `]` do the same. `$` jumps to the end of the sequence and `0` returns to the year the writer is living in, borrowing both meanings from a line of text. Stepping moves between years that have entries rather than through the calendar, so a keystroke never lands on a year of zeroes; the current year is always offered even before anything is logged in it. Either end says so rather than sitting mute.
 
@@ -347,14 +347,30 @@ Melange, mapped by role so the palette is referenced in one module rather than s
 
 Completed bars on the current-year projects graph are green as specified, which is why green is reserved and not part of the series rotation. Abandoned bars take the muted `c.red` rather than the brighter `b.red`, so abandoning a piece reads as a neutral outcome rather than an error.
 
-## Build sequence
+## How it was built
 
-1. Cargo scaffold, schema, migrations, and the `rusqlite` access layer.
-2. Importer, validated by comparing its report against the dry-run figures above. Run against a scratch database via `--db` first.
-3. Entry form, including the session arithmetic and the negative case.
-4. Entry history with edit and delete.
-5. Projects and categories screens.
-6. Stats dashboard with year stepping.
-7. Help popup and theme pass.
+Seven steps, each leaving something usable, so the import could be checked against the spreadsheets long before any of the interface existed.
 
-Each step after the first is independently usable, so the import can be checked against the spreadsheets before any of the UI exists.
+1. Schema, migrations and the `rusqlite` access layer.
+2. The importer, checked by comparing its report against an independent parse of the same files.
+3. The entry form, including the session arithmetic and the negative case.
+4. Entry history, with editing and deletion.
+5. The projects and categories screens.
+6. The stats dashboard with year stepping.
+7. The help popup and the theme.
+
+Four things were added afterwards, each because using the program asked for them rather than because the design anticipated them.
+
+The `log` command came from the observation that the thing done most often, recording one session, did not need a screen at all. The leader menu came from wanting the keymap at the moment the leader key is pressed. The configuration file came from wanting the database and the backup directory to be chosen per installation rather than compiled in. Backups came from the question of what happens when a session is left open in one terminal and an entry is logged from another, which turned out to be a question about stale figures rather than about lost writes.
+
+Several decisions in this document were reversed along the way, and the reversals are recorded next to the decisions rather than tidied away: `is_completed` became a three-state status, stored baselines were removed once real 2023 entries replaced them, the history panel gained the project field it had been denied, and `j` and `k` stopped moving the project list from wherever the cursor happened to be. The reasoning that was wrong is as much a part of the record as the reasoning that held.
+
+## Demonstration data
+
+`cargo run --example demo_data -- <path>` writes a database of invented projects across four years, which `cargo run -- --db <path>` then opens. The content is 18 projects, 149 sessions and about 172,000 words over 188 hours: small enough to read at a glance, large enough that every screen has something real to show.
+
+The cases in it are chosen rather than random, because the ones worth demonstrating are the ones that are awkward to produce by hand. A revision day that cuts 1,340 words, so the negative session is visible rather than theoretical. A session recording time with no net words, which is what the quarter-hour floor exists for. Two sessions on one project on one day. A novel spanning 2024 into 2025, so a project's start and end sit in different years. An abandoned project, a project finished in a single sitting, and eighteen projects in all, which is more than the stats graph can list at once, so its scrolling and the wrapped category legend are both exercised.
+
+Generation is deterministic, seeded with a fixed constant, so the same command always produces the same database and a screenshot taken from it stays accurate. Titles and categories are invented; none of the real log is in the repository.
+
+The generator lives in the library rather than in the example that calls it, so it is covered by tests and cannot drift from the schema: a fixture that no longer loads is worse than no fixture. Nineteen tests assert both the shape of the result and the presence of each awkward case by name, so removing one from the generator fails a test that says which. It writes inside a single transaction and refuses a database that already holds projects, entries, or even a leftover category, so a half-written fixture is not a state it can leave behind.
