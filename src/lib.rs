@@ -4,6 +4,7 @@
 //! any particular writer's projects or categories, so the same code serves any
 //! journal that meets the importer's input contract.
 
+pub mod backup;
 pub mod cli;
 pub mod config;
 pub mod db;

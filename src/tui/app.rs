@@ -12,6 +12,8 @@ use super::entry::{Choice, EntryForm, Field, Mode};
 use super::history::{EditField, History};
 use super::projects::Projects;
 use super::stats::Stats;
+use crate::backup;
+use crate::config::Config;
 use crate::db::models::Status;
 use crate::db::{Db, DbError, repo};
 
@@ -59,6 +61,7 @@ pub enum Flow {
 
 pub struct App {
     pub db: Db,
+    pub config: Config,
     pub screen: Screen,
     pub form: EntryForm,
     pub history: History,
@@ -91,7 +94,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(db: Db) -> Result<Self> {
+    pub fn new(db: Db, config: Config) -> Result<Self> {
         let form = EntryForm::new(load_choices(&db)?, Local::now().date_naive());
         let history = History::new(
             repo::recent_entries_with_project(db.conn(), None)?,
@@ -107,8 +110,16 @@ impl App {
         );
         let stats = Stats::load(&db)?;
         let last_data_version = db.data_version()?;
-        Ok(Self {
+        // Taken before anything in this session can change the log, so the copy
+        // on disk is the state to come back to if this session goes wrong.
+        let startup = if config.backups_enabled() {
+            backup::best_effort(&db, &config).map(Some)
+        } else {
+            Ok(None)
+        };
+        let mut app = Self {
             db,
+            config,
             screen: Screen::Entry,
             form,
             history,
@@ -123,7 +134,28 @@ impl App {
             pending_g: false,
             confirming_quit: false,
             last_data_version,
-        })
+        };
+        if let Err(message) = startup {
+            app.set_flash(Tone::Warning, format!("backup failed: {message}"));
+        }
+        Ok(app)
+    }
+
+    /// Back up after a change, without letting a backup failure matter.
+    ///
+    /// A warning replaces the success message rather than being queued behind it:
+    /// one line of status bar, and "your entry saved but the backup did not" is
+    /// the more important half.
+    fn backup_after_change(&mut self) {
+        if !self.config.backups_enabled() {
+            return;
+        }
+        if let Err(message) = backup::best_effort(&self.db, &self.config) {
+            self.set_flash(
+                Tone::Warning,
+                format!("saved, but the backup failed: {message}"),
+            );
+        }
     }
 
     /// Reload if another session has committed since the last look.
@@ -435,6 +467,7 @@ impl App {
                     format!("saved: {words} words on {title}")
                 };
                 self.set_flash(Tone::Success, summary);
+                self.backup_after_change();
             }
         }
         Ok(())

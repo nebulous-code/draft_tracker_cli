@@ -37,18 +37,6 @@ pub fn type_id_by_name(conn: &Connection, name: &str) -> Result<Option<i64>, DbE
         .optional()?)
 }
 
-pub fn list_types(conn: &Connection) -> Result<Vec<Type>, DbError> {
-    let mut stmt = conn.prepare("SELECT id, name, description FROM types ORDER BY name")?;
-    let rows = stmt.query_map([], |r| {
-        Ok(Type {
-            id: r.get(0)?,
-            name: r.get(1)?,
-            description: r.get(2)?,
-        })
-    })?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
-}
-
 // ---------------------------------------------------------------- categories
 
 pub fn insert_category(
@@ -79,20 +67,6 @@ pub fn category_id_by_name(conn: &Connection, name: &str) -> Result<Option<i64>,
             |r| r.get(0),
         )
         .optional()?)
-}
-
-pub fn list_categories(conn: &Connection) -> Result<Vec<Category>, DbError> {
-    let mut stmt =
-        conn.prepare("SELECT id, name, type_id, description FROM categories ORDER BY name")?;
-    let rows = stmt.query_map([], |r| {
-        Ok(Category {
-            id: r.get(0)?,
-            name: r.get(1)?,
-            type_id: r.get(2)?,
-            description: r.get(3)?,
-        })
-    })?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 pub fn update_category(
@@ -329,14 +303,6 @@ pub fn recent_entries(conn: &Connection, limit: i64) -> Result<Vec<Entry>, DbErr
         "SELECT {ENTRY_COLUMNS} FROM entries ORDER BY entry_date DESC, id DESC LIMIT ?1"
     ))?;
     let rows = stmt.query_map(params![limit], entry_from_row)?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
-}
-
-pub fn entries_for_project(conn: &Connection, project_id: i64) -> Result<Vec<Entry>, DbError> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT {ENTRY_COLUMNS} FROM entries WHERE project_id = ?1 ORDER BY entry_date, id"
-    ))?;
-    let rows = stmt.query_map(params![project_id], entry_from_row)?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 

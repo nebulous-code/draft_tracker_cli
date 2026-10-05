@@ -190,6 +190,28 @@ Oddities carried through intact rather than cleaned, because they are real worki
 
 85 days carry more than one entry, at most 4, and two days carry two entries for the same project, which the entry form supports.
 
+## Settings and backups
+
+Settings come from a file at `~/.config/draft_tracker/config.toml`, resolved behind a command line option and an environment variable and in front of the built-in defaults. Each resolved value carries the source that decided it, which is what lets `draft-tracker config` print not just what is in force but why. With a live log and a scratch one in play that is the difference between knowing which database is about to be written to and assuming it.
+
+Automatic backups can be turned off, by `backups = false` in the file or `--no-backup` for one run. Asking for a backup outright still takes one: somebody who typed the command meant it. The setting exists because a writer whose filesystem already snapshots the live database may reasonably not want a second mechanism copying it.
+
+Unknown keys in the file are refused rather than ignored. The file is edited by hand, and a `backups_to_keeep` that silently does nothing is worse than an error naming it.
+
+A backup is `VACUUM INTO`. One statement, it reads the logical database so the write-ahead log is not a consideration, it compacts as it goes, and it refuses to write over an existing file, which is exactly what is wanted for a named destination: a mistyped path cannot quietly replace an archive.
+
+Backups are skipped when nothing has changed. A fresh copy goes to a temporary file and is compared against the most recent backup byte for byte; matching means the temporary file is discarded. This is exact rather than a heuristic, because `VACUUM INTO` of unchanged content is byte-identical, which was measured before the design depended on it. The reason it matters is retention: without it, `backups_to_keep` counts program launches, so an afternoon of opening the dashboard to read evicts a week of history. With it, the count measures states the log was actually in, which is the thing a writer would mean.
+
+Byte comparison rather than a hash: both files are already on disk, the comparison is exact with nothing to reason about regarding collisions, and it saves a dependency.
+
+Automatic backups are taken when the interface opens and after every saved entry. The first is the more useful of the two, because it captures the state before a session can go wrong; the second is what stops a day's writing sitting unprotected until the next launch. Neither may block: a failure is reported and the work carries on, because losing words to protect a copy of them is the wrong way round. `import --reset` is the exception, and refuses to proceed until a backup succeeds, since it deletes every row and a flag is thin protection for that.
+
+Two bugs here were found by running it rather than by reading it, and both are worth recording because both were silent.
+
+Verifying a backup opened it the ordinary way, which set its journal mode and so rewrote the file being checked. That made it stop matching a fresh copy, so every later backup was written as though something had changed, and the skip logic never fired once. Backups are now opened read-only and without migrations.
+
+Ordering was by filename, on the reasoning that a timestamp sorts lexically. It does, until two backups land in the same second and a counter is appended: `-2` sorts before `.`, so the newest looked like the oldest, and pruning deleted the wrong file. Names now carry milliseconds, and ordering is by modification time with the name breaking ties, because time is what is actually meant. Encoding an ordering into names and then deleting files by it put the newest backup at risk to save a `stat` call.
+
 ## A second session
 
 The command line writes entries, so two connections against one database is the ordinary case rather than an edge. The database copes: WAL allows a writer alongside readers, there is a five second busy timeout, and a write from the command line lands while an interface is open. That was checked against a held-open connection rather than assumed.
@@ -292,7 +314,7 @@ Leader is space. No control combinations are used anywhere.
 | `h` / `l` | step a choice field: the entry form's project, a project's category and status, a category's type; switch pane on the categories screen |
 | `Tab` / `Shift-Tab` | next and previous field in a form |
 | `i` / `a`, `Esc` | begin and end editing a field; on a choice field, narrow its list |
-| `/`, `n`, `N` | filter a list and step matches |
+| `/` | filter a list; it narrows rather than stepping between matches, so there is no `n` |
 | `A` | widen a list from open projects to all of them, on the entry form and the projects screen |
 | `o` | create a record on the projects or categories screen |
 | `x` | cycle status on the projects list: open, completed, abandoned |

@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
+use draft_tracker::backup;
 use draft_tracker::cli;
-use draft_tracker::config::{DB_PATH_ENV, resolve_db_path};
+use draft_tracker::config::{Config, Overrides};
 use draft_tracker::db::{Db, stats};
 use draft_tracker::import::{self, Existing};
 use draft_tracker::tui;
@@ -38,6 +39,8 @@ Usage:
   draft-tracker [--db <path>]
   draft-tracker [--db <path>] status
   draft-tracker [--db <path>] import <dir> [--reset] [--dry-run]
+  draft-tracker [--db <path>] backup [<path>]
+  draft-tracker config [--init]
   draft-tracker --help
   draft-tracker --version
 
@@ -53,13 +56,20 @@ Logging a session:
       --any            allow a completed or abandoned project
 
 Options:
-  --db <path>   use this database instead of the default location
-  --reset       let import replace data already in the database
-  --dry-run     let import report what it would do, writing nothing
-  --help, -h    show this message
-  --version, -V show the version and the commit it was built from
+  --db <path>       use this database instead of the configured one
+  --config <path>   use this configuration file
+  --reset           let import replace data already in the database
+  --dry-run         let import report what it would do, writing nothing
+  --no-backup       take no automatic backups during this run
+  --init            with config, write a commented file if none exists
+  --help, -h        show this message
+  --version, -V     show the version and the commit it was built from
 
 With no command, the terminal interface opens on the entry form.
+
+Backups are taken automatically when the interface opens and when an entry is
+saved, and are skipped when nothing has changed. `draft-tracker config` shows
+where they go and how many are kept.
 ";
 
 fn main() -> ExitCode {
@@ -97,6 +107,9 @@ struct Args {
     notes: Option<String>,
     help: bool,
     version: bool,
+    config: Option<PathBuf>,
+    no_backup: bool,
+    init: bool,
 }
 
 fn parse_args() -> Result<Args> {
@@ -110,6 +123,9 @@ fn parse_args() -> Result<Args> {
             "--help" | "-h" => args.help = true,
             "--version" | "-V" => args.version = true,
             "--db" => args.db = Some(PathBuf::from(value("--db")?)),
+            "--config" => args.config = Some(PathBuf::from(value("--config")?)),
+            "--no-backup" => args.no_backup = true,
+            "--init" => args.init = true,
             "--reset" => args.reset = true,
             "--dry-run" => args.dry_run = true,
             "--yes" | "-y" => args.yes = true,
@@ -146,15 +162,21 @@ fn run() -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let path = resolve_db_path(args.db.clone())?;
+    let config = Config::load(&Overrides {
+        database: args.db.clone(),
+        config_path: args.config.clone(),
+        no_backup: args.no_backup,
+    })?;
+    let path = config.database().to_path_buf();
+
     match args.command.as_deref() {
         // The entry form is the daily path in the interface, so it opens by default.
         None => {
             let db = Db::open(&path).with_context(|| format!("opening {}", path.display()))?;
-            tui::run(db)?;
+            tui::run(db, config)?;
             Ok(ExitCode::SUCCESS)
         }
-        Some("log") => log(&path, &args),
+        Some("log") => log(&config, &args),
         Some("status") => {
             let mut out = io::stdout().lock();
             let interactive = io::stdout().is_terminal();
@@ -167,7 +189,19 @@ fn run() -> Result<ExitCode> {
                 bail!("import needs exactly one directory; try --help");
             };
             let mut out = io::stdout().lock();
-            import_journals(&path, Path::new(dir), args.reset, args.dry_run, &mut out)?;
+            import_journals(&config, Path::new(dir), &args, &mut out)?;
+            out.flush()?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some("backup") => {
+            let mut out = io::stdout().lock();
+            let code = take_backup(&config, &args, &mut out)?;
+            out.flush()?;
+            Ok(code)
+        }
+        Some("config") => {
+            let mut out = io::stdout().lock();
+            show_config(&config, args.init, &mut out)?;
             out.flush()?;
             Ok(ExitCode::SUCCESS)
         }
@@ -175,8 +209,149 @@ fn run() -> Result<ExitCode> {
     }
 }
 
+/// Take a backup on demand.
+///
+/// With a path it writes exactly there and always writes, because somebody asking
+/// for a copy at a named place wants that file to exist. Without one it uses the
+/// configured directory, where it skips an unchanged log and prunes old copies.
+fn take_backup(config: &Config, args: &Args, out: &mut impl Write) -> Result<ExitCode> {
+    let path = config.database();
+    let db = Db::open(path).with_context(|| format!("opening {}", path.display()))?;
+
+    let written = match args.positional.as_slice() {
+        [] => match backup::run(&db, config)? {
+            backup::Outcome::Unchanged { matched } => {
+                writeln!(out, "Nothing has changed since {}.", matched.display())?;
+                return Ok(ExitCode::SUCCESS);
+            }
+            backup::Outcome::Written { path, pruned } => {
+                writeln!(out, "Wrote {}", path.display())?;
+                if !pruned.is_empty() {
+                    writeln!(
+                        out,
+                        "Pruned {} older backup(s), keeping {}.",
+                        pruned.len(),
+                        config.backups_to_keep.value
+                    )?;
+                }
+                path
+            }
+        },
+        [destination] => {
+            let destination = PathBuf::from(destination);
+            backup::write_to(&db, &destination)?;
+            writeln!(out, "Wrote {}", destination.display())?;
+            destination
+        }
+        _ => bail!("backup takes at most one path; try --help"),
+    };
+
+    // Open what was written and say what is in it. A backup nobody has looked at
+    // is a guess.
+    let verified = backup::verify(&written)?;
+    writeln!(
+        out,
+        "  integrity_check  {}\n  entries          {}\n  words            {}\n  projects         {}\n  size             {} bytes",
+        verified.integrity,
+        verified.entries,
+        cli::thousands(verified.words),
+        verified.projects,
+        verified.bytes
+    )?;
+    if !verified.is_sound() {
+        writeln!(out, "\nThat backup is not sound. Keep the original.")?;
+        return Ok(ExitCode::FAILURE);
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Print every setting, its value, and which source decided it.
+fn show_config(config: &Config, init: bool, out: &mut impl Write) -> Result<()> {
+    if init {
+        if config.config_exists {
+            writeln!(
+                out,
+                "{} already exists; leaving it alone.",
+                config.config_path.display()
+            )?;
+        } else {
+            if let Some(parent) = config.config_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            std::fs::write(
+                &config.config_path,
+                draft_tracker::config::example_file(config),
+            )
+            .with_context(|| format!("writing {}", config.config_path.display()))?;
+            writeln!(out, "Wrote {}", config.config_path.display())?;
+        }
+        writeln!(out)?;
+    }
+
+    writeln!(
+        out,
+        "config file        {}{}",
+        config.config_path.display(),
+        if config.config_exists {
+            ""
+        } else {
+            "   (does not exist)"
+        }
+    )?;
+    writeln!(out)?;
+    let row = |out: &mut dyn Write, label: &str, value: String, source: String| -> Result<()> {
+        writeln!(out, "{label:<18} {value:<52} {source}")?;
+        Ok(())
+    };
+    row(
+        out,
+        "database",
+        config.database.value.display().to_string(),
+        config.database.source.to_string(),
+    )?;
+    row(
+        out,
+        "backup_directory",
+        config.backup_directory.value.display().to_string(),
+        config.backup_directory.source.to_string(),
+    )?;
+    row(
+        out,
+        "backups_to_keep",
+        config.backups_to_keep.value.to_string(),
+        config.backups_to_keep.source.to_string(),
+    )?;
+    row(
+        out,
+        "backups",
+        config.backups.value.to_string(),
+        config.backups.source.to_string(),
+    )?;
+    row(
+        out,
+        "name",
+        config.name.value.clone(),
+        config.name.source.to_string(),
+    )?;
+
+    let existing = backup::list(&config.backup_directory.value, &config.name.value)?;
+    writeln!(out)?;
+    match existing.last() {
+        Some(newest) => writeln!(
+            out,
+            "{} backup(s) present, newest {}",
+            existing.len(),
+            newest.file_name().unwrap_or_default().to_string_lossy()
+        )?,
+        None => writeln!(out, "no backups yet")?,
+    }
+    Ok(())
+}
+
 /// Log one session, after showing it and asking.
-fn log(db_path: &Path, args: &Args) -> Result<ExitCode> {
+fn log(config: &Config, args: &Args) -> Result<ExitCode> {
+    let db_path = config.database();
     let [project, words, hours] = args.positional.as_slice() else {
         bail!(
             "log needs a project, a word count and hours, for example:\n  \
@@ -244,6 +419,14 @@ fn log(db_path: &Path, args: &Args) -> Result<ExitCode> {
         cli::thousands(total)
     )?;
     out.flush()?;
+    // Reported but not fatal: the entry is saved, which is what the command was
+    // for, and losing the words because a backup could not be written would be
+    // the wrong way round.
+    if config.backups_enabled()
+        && let Err(message) = backup::best_effort(&db, config)
+    {
+        let _ = writeln!(io::stderr(), "draft-tracker: the backup failed: {message}");
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -271,13 +454,9 @@ fn read_answer() -> Result<Answer> {
 }
 
 /// Import a directory of journals, or report what an import would do.
-fn import_journals(
-    db_path: &Path,
-    dir: &Path,
-    reset: bool,
-    dry_run: bool,
-    out: &mut impl Write,
-) -> Result<()> {
+fn import_journals(config: &Config, dir: &Path, args: &Args, out: &mut impl Write) -> Result<()> {
+    let db_path = config.database();
+    let (reset, dry_run) = (args.reset, args.dry_run);
     if dry_run {
         let resolved = import::plan(dir)
             .with_context(|| format!("reading journals from {}", dir.display()))?;
@@ -288,6 +467,23 @@ fn import_journals(
     }
 
     let mut db = Db::open(db_path).with_context(|| format!("opening {}", db_path.display()))?;
+
+    // --reset deletes every row. That is the one place a backup is not a courtesy,
+    // so failing to take one stops the import instead of being noted and ignored.
+    // --no-backup is how to say you understand.
+    if reset && !db.is_empty()? && config.backups_enabled() {
+        match backup::run(&db, config) {
+            Ok(outcome) => match outcome.written_path() {
+                Some(path) => writeln!(out, "Backed up to {} first.", path.display())?,
+                None => writeln!(out, "An up to date backup already exists.")?,
+            },
+            Err(error) => bail!(
+                "refusing to reset: the backup failed ({error}).\n\
+                 Fix the backup location, or pass --no-backup to reset anyway."
+            ),
+        }
+    }
+
     let existing = if reset {
         Existing::Reset
     } else {
@@ -319,7 +515,10 @@ fn status(path: &Path, out: &mut impl Write, interactive: bool) -> Result<()> {
             "No projects or entries yet. Nothing has been imported."
         )?;
         if interactive {
-            writeln!(out, "({DB_PATH_ENV} or --db selects a different database.)")?;
+            writeln!(
+                out,
+                "(`draft-tracker config` shows which database this is and why.)"
+            )?;
         }
         return Ok(());
     }

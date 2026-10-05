@@ -7,6 +7,45 @@ use draft_tracker::tui::app::{App, Flow, Screen, Tone};
 use draft_tracker::tui::entry::{Field, Mode, Problem};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+/// A configuration for a test that does not care about backups.
+///
+/// Explicit rather than loaded, so a test run can never reach a real database or
+/// a real backup directory, and with automatic backups off so that the great
+/// majority of these tests write no files at all. The handful that do care turn
+/// them on with [`BackupDir`].
+fn test_config() -> draft_tracker::config::Config {
+    draft_tracker::config::Config::explicit("unused.db", "unused", 5, "t").with_backups(false)
+}
+
+/// A temporary backup directory that removes itself, for the tests that exercise
+/// backups rather than merely tolerating them.
+struct BackupDir(std::path::PathBuf);
+
+impl BackupDir {
+    fn new(label: &str) -> Self {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("dt_tui_backups_{label}_{}_{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        Self(dir)
+    }
+
+    fn config(&self) -> draft_tracker::config::Config {
+        draft_tracker::config::Config::explicit(self.0.join("t.db"), &self.0, 5, "t")
+    }
+
+    fn backups(&self) -> Vec<std::path::PathBuf> {
+        draft_tracker::backup::list(&self.0, "t").unwrap()
+    }
+}
+
+impl Drop for BackupDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent {
         code,
@@ -55,7 +94,7 @@ fn app_with_projects() -> App {
         repo::insert_project(conn, "Brand New", Some(book), Status::Open, None).unwrap();
         repo::insert_project(conn, "Shipped", Some(book), Status::Completed, None).unwrap();
     }
-    App::new(db).unwrap()
+    App::new(db, test_config()).unwrap()
 }
 
 /// Move the cursor to a field by tabbing, which is what a writer does.
@@ -698,7 +737,7 @@ fn app_with_history() -> App {
         add(story, (2026, 1, 13), 880, 1.5, None);
         add(novel, (2026, 1, 14), 20_000, 1.0, Some("meant 2,000"));
     }
-    App::new(db).unwrap()
+    App::new(db, test_config()).unwrap()
 }
 
 fn to_history(app: &mut App) {
@@ -1069,7 +1108,7 @@ fn the_screens_handle_the_authors_real_journals() {
     }
     let mut db = Db::open_in_memory().unwrap();
     draft_tracker::import::run(&mut db, dir, draft_tracker::import::Existing::Refuse).unwrap();
-    let mut app = App::new(db).unwrap();
+    let mut app = App::new(db, test_config()).unwrap();
 
     // Every entry is reachable, so G really does reach the oldest.
     to_history(&mut app);
@@ -1782,7 +1821,7 @@ fn app_with_years() -> App {
         add(essay, (2025, 5, 2), 3_000, 2.0);
         add(live, (2026, 1, 12), 1_800, 3.0);
     }
-    App::new(db).unwrap()
+    App::new(db, test_config()).unwrap()
 }
 
 fn to_stats(app: &mut App) {
@@ -2177,7 +2216,7 @@ fn the_dashboard_copes_with_the_authors_real_journals() {
     }
     let mut db = Db::open_in_memory().unwrap();
     draft_tracker::import::run(&mut db, dir, draft_tracker::import::Existing::Refuse).unwrap();
-    let mut app = App::new(db).unwrap();
+    let mut app = App::new(db, test_config()).unwrap();
     to_stats(&mut app);
 
     assert_eq!(app.stats.lifetime.words, 466_665);
@@ -2222,7 +2261,7 @@ fn show_the_real_dashboard() {
     }
     let mut db = Db::open_in_memory().unwrap();
     draft_tracker::import::run(&mut db, dir, draft_tracker::import::Existing::Refuse).unwrap();
-    let mut app = App::new(db).unwrap();
+    let mut app = App::new(db, test_config()).unwrap();
     to_stats(&mut app);
     app.on_key(ch('k')).unwrap(); // 2025, the busiest full year
     for line in render(&mut app, 104, 28) {
@@ -2238,7 +2277,7 @@ fn show_the_real_projects_screen() {
     }
     let mut db = Db::open_in_memory().unwrap();
     draft_tracker::import::run(&mut db, dir, draft_tracker::import::Existing::Refuse).unwrap();
-    let mut app = App::new(db).unwrap();
+    let mut app = App::new(db, test_config()).unwrap();
     to_screen(&mut app, 'p', Screen::Projects);
     for line in render(&mut app, 96, 20) {
         println!("|{line}");
@@ -2482,7 +2521,7 @@ fn show_the_all_time_dashboard() {
     }
     let mut db = Db::open_in_memory().unwrap();
     draft_tracker::import::run(&mut db, dir, draft_tracker::import::Existing::Refuse).unwrap();
-    let mut app = App::new(db).unwrap();
+    let mut app = App::new(db, test_config()).unwrap();
     to_stats(&mut app);
     app.on_key(ch('$')).unwrap();
     for line in render(&mut app, 104, 28) {
@@ -2683,7 +2722,7 @@ fn app_on_disk(temp: &TempDb) -> App {
         )
         .unwrap();
     }
-    App::new(temp.open()).unwrap()
+    App::new(temp.open(), test_config()).unwrap()
 }
 
 /// Simulate the command line, or a second interface, on its own connection.
@@ -2860,5 +2899,204 @@ fn changing_screen_says_nothing_when_nothing_changed_outside() {
         app.flash.is_none(),
         "no news is not worth a message: {:?}",
         app.flash
+    );
+}
+
+// ============================================================ automatic backups
+
+/// An interface over a real file, with automatic backups turned on.
+fn app_with_backups(dir: &BackupDir) -> App {
+    let config = dir.config();
+    {
+        let db = Db::open(config.database()).unwrap();
+        let id = repo::insert_project(db.conn(), "Fireside 1", None, Status::Open, None).unwrap();
+        repo::insert_entry(
+            db.conn(),
+            &NewEntry {
+                entry_date: day(2026, 1, 12),
+                project_id: id,
+                session_word_count: 1_000,
+                hours: 1.0,
+                notes: None,
+            },
+        )
+        .unwrap();
+    }
+    App::new(Db::open(config.database()).unwrap(), config).unwrap()
+}
+
+/// Taken before this session can change anything, so there is a state to come
+/// back to if the session goes wrong.
+#[test]
+fn opening_the_interface_takes_a_backup() {
+    let dir = BackupDir::new("open");
+    assert!(dir.backups().is_empty());
+    let app = app_with_backups(&dir);
+    assert_eq!(dir.backups().len(), 1, "opening should have taken one");
+    assert!(app.flash.is_none(), "a backup that worked is not news");
+
+    let verified = draft_tracker::backup::verify(&dir.backups()[0]).unwrap();
+    assert_eq!(verified.words, 1_000, "the backup holds the log as it was");
+}
+
+#[test]
+fn saving_an_entry_takes_a_backup() {
+    let dir = BackupDir::new("submit");
+    let mut app = app_with_backups(&dir);
+    assert_eq!(dir.backups().len(), 1);
+
+    select_title(&mut app, "Fireside 1");
+    type_into(&mut app, Field::Hours, "1");
+    type_into(&mut app, Field::ProjectWords, "1500");
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+    assert_eq!(app.flash.as_ref().unwrap().tone, Tone::Success);
+
+    let backups = dir.backups();
+    assert_eq!(backups.len(), 2, "saving should have taken another");
+    assert_eq!(
+        draft_tracker::backup::verify(backups.last().unwrap())
+            .unwrap()
+            .words,
+        1_500,
+        "the newest backup includes the entry just saved"
+    );
+}
+
+/// The point of comparing before writing: reading does not consume history.
+#[test]
+fn reopening_without_changing_anything_takes_no_second_backup() {
+    let dir = BackupDir::new("unchanged");
+    let first = app_with_backups(&dir);
+    drop(first);
+    assert_eq!(dir.backups().len(), 1);
+
+    let config = dir.config();
+    let _second = App::new(Db::open(config.database()).unwrap(), config).unwrap();
+    assert_eq!(
+        dir.backups().len(),
+        1,
+        "nothing changed, so nothing new was written"
+    );
+}
+
+#[test]
+fn turning_backups_off_writes_nothing() {
+    let dir = BackupDir::new("off");
+    let config = dir.config().with_backups(false);
+    {
+        let db = Db::open(config.database()).unwrap();
+        repo::insert_project(db.conn(), "Fireside 1", None, Status::Open, None).unwrap();
+    }
+    let mut app = App::new(Db::open(config.database()).unwrap(), config).unwrap();
+    assert!(dir.backups().is_empty(), "opening took one anyway");
+
+    select_title(&mut app, "Fireside 1");
+    type_into(&mut app, Field::Hours, "1");
+    type_into(&mut app, Field::ProjectWords, "900");
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+    assert_eq!(
+        app.flash.as_ref().unwrap().tone,
+        Tone::Success,
+        "the entry still saves"
+    );
+    assert!(dir.backups().is_empty(), "saving took one anyway");
+    assert_eq!(repo::project_logged_total(app.db.conn(), 1).unwrap(), 900);
+}
+
+/// A backup that cannot be written is reported and nothing else: the interface
+/// still opens, because refusing to run would be a worse failure than having no
+/// copy of a log that is still perfectly intact.
+#[test]
+fn a_failing_backup_on_open_warns_without_stopping_anything() {
+    let dir = BackupDir::new("badopen");
+    let config = draft_tracker::config::Config::explicit(
+        dir.config().database(),
+        "/proc/draft_tracker_cannot_exist/backups",
+        5,
+        "t",
+    );
+    {
+        let db = Db::open(config.database()).unwrap();
+        repo::insert_project(db.conn(), "Fireside 1", None, Status::Open, None).unwrap();
+    }
+    let app = App::new(Db::open(config.database()).unwrap(), config).unwrap();
+    let flash = app.flash.as_ref().expect("a warning");
+    assert_eq!(flash.tone, Tone::Warning);
+    assert!(flash.text.contains("backup failed"), "got {:?}", flash.text);
+    assert_eq!(
+        app.form.visible().len(),
+        1,
+        "the interface is usable regardless"
+    );
+}
+
+/// And on a save, the words matter more than the copy of them.
+#[test]
+fn a_failing_backup_on_save_still_saves_the_entry() {
+    let dir = BackupDir::new("badsave");
+    let config = draft_tracker::config::Config::explicit(
+        dir.config().database(),
+        "/proc/draft_tracker_cannot_exist/backups",
+        5,
+        "t",
+    );
+    {
+        let db = Db::open(config.database()).unwrap();
+        repo::insert_project(db.conn(), "Fireside 1", None, Status::Open, None).unwrap();
+    }
+    let mut app = App::new(Db::open(config.database()).unwrap(), config).unwrap();
+
+    select_title(&mut app, "Fireside 1");
+    type_into(&mut app, Field::Hours, "1");
+    type_into(&mut app, Field::ProjectWords, "640");
+    app.on_key(ch(' ')).unwrap();
+    app.on_key(key(KeyCode::Enter)).unwrap();
+
+    let flash = app.flash.as_ref().expect("a warning");
+    assert_eq!(flash.tone, Tone::Warning);
+    assert!(
+        flash.text.contains("saved, but the backup failed"),
+        "got {:?}",
+        flash.text
+    );
+    assert_eq!(
+        repo::project_logged_total(app.db.conn(), 1).unwrap(),
+        640,
+        "the entry is in the database whatever happened to the backup"
+    );
+}
+
+#[test]
+fn backups_are_pruned_to_the_configured_count() {
+    let dir = BackupDir::new("prune");
+    let config = draft_tracker::config::Config::explicit(
+        dir.config().database(),
+        dir.config().backup_directory.value.clone(),
+        2,
+        "t",
+    );
+    {
+        let db = Db::open(config.database()).unwrap();
+        repo::insert_project(db.conn(), "Fireside 1", None, Status::Open, None).unwrap();
+    }
+    let mut app = App::new(Db::open(config.database()).unwrap(), config).unwrap();
+
+    for total in ["100", "200", "300"] {
+        select_title(&mut app, "Fireside 1");
+        type_into(&mut app, Field::Hours, "1");
+        type_into(&mut app, Field::ProjectWords, total);
+        app.on_key(ch(' ')).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+    }
+    let kept = dir.backups();
+    assert_eq!(kept.len(), 2, "kept {kept:?}");
+    assert_eq!(
+        draft_tracker::backup::verify(kept.last().unwrap())
+            .unwrap()
+            .words,
+        300,
+        "the newest kept backup is the newest state"
     );
 }

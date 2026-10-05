@@ -43,15 +43,6 @@ impl ImportReport {
     pub fn skipped(&self) -> usize {
         self.skipped_no_date + self.skipped_no_work + self.skipped_no_project
     }
-
-    /// True when nothing needed explaining. Useful for tests.
-    pub fn is_clean(&self) -> bool {
-        self.names_collapsed.is_empty()
-            && self.hours_raised.is_empty()
-            && self.pre_tracking_words.is_empty()
-            && self.uncategorised_projects.is_empty()
-            && self.status_rows_without_entries.is_empty()
-    }
 }
 
 /// Lists a few items and then says how many more there are, so a report over a

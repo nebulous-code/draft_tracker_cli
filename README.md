@@ -136,6 +136,7 @@ The word count is the project's new running total. On a project's first entry th
 | `-y`, `--yes` | save without asking |
 | `--any` | allow a completed or abandoned project |
 | `--db <path>` | use a different database |
+| `--config <path>` | use a different configuration file |
 
 `draft-tracker --version` reports the version, the commit it was built from and whether that build included uncommitted changes, which is the quickest way to tell whether an installed copy is the build you think it is.
 
@@ -166,16 +167,51 @@ One SQLite file, at `$XDG_DATA_HOME/draft_tracker/draft_tracker.db`, or `~/.loca
 
 It is a plain database with four tables and no bespoke format, so anything that reads SQLite can read your writing history. Nothing is locked up.
 
-It runs in WAL mode, so a `-wal` and a `-shm` file sit beside it while the program is open and are folded back in when the last connection closes. **Copying only the `.db` file while the program is running will miss recent entries.** To take a backup safely:
-
-```sh
-sqlite3 ~/.local/share/draft_tracker/draft_tracker.db \
-  "VACUUM INTO '/path/to/backup.db'"
-```
-
-That writes one consistent file, and works while the program is running.
+It runs in WAL mode, so a `-wal` and a `-shm` file sit beside it while the program is open and are folded back in when the last connection closes. One consequence worth knowing: **copying only the `.db` file while the program is running will miss recent entries**, because they are still in the write-ahead log. Use the backup command rather than `cp`.
 
 `draft-tracker status` prints the totals and your open projects without opening the interface.
+
+## Backups
+
+A backup is taken automatically when the interface opens and whenever an entry is saved, and `import --reset` refuses to run until one succeeds, because that command deletes every row.
+
+Backups are **skipped when nothing has changed**. A fresh copy is compared against the most recent one, so opening the program to read does not consume a generation. That is what makes `backups_to_keep` meaningful: twenty backups are the last twenty states your log was actually in, not the last twenty times you started the program.
+
+Set `backups = false`, or pass `--no-backup` for one run, to turn the automatic ones off; asking for one outright still works.
+
+A backup never blocks you. If the directory is missing or the disk is full you get a warning and your entry is still saved, because losing the words to protect a copy of them would be the wrong way round.
+
+```sh
+draft-tracker backup                 # into the configured directory
+draft-tracker backup ~/archive.db    # exactly there, and never overwriting
+```
+
+Either way it opens what it wrote and reports an integrity check with the entry, word and project counts, so you can see the copy contains your writing rather than merely existing.
+
+Backups land beside the database by default. That protects you against mistakes and not against losing the disk, so point `backup_directory` at something that leaves the machine. Snapshots or replication on that directory pair well with this: the program keeps the recent states, and the filesystem keeps the long tail.
+
+## Configuration
+
+Optional. `~/.config/draft_tracker/config.toml`, or wherever `--config` points. `draft-tracker config --init` writes a commented file with every default filled in.
+
+```toml
+database = "/tank/writing/draft_tracker/data/draft_tracker.db"
+backup_directory = "/tank/writing/draft_tracker/backups"
+backups_to_keep = 20
+backups = true
+name = "draft_tracker"
+```
+
+`name` prefixes backup filenames and defaults to the database's filename, so one directory can hold backups of several logs and a scratch database can never prune the real one's.
+
+A command line option beats an environment variable (`DRAFT_TRACKER_DB`, `DRAFT_TRACKER_BACKUP_DIR`), which beats the file, which beats the default. `draft-tracker config` prints what is in force and **which of those decided it**, which is the quickest way to be certain which log you are about to write to.
+
+```
+database           /tank/writing/draft_tracker/data/draft_tracker.db   config file
+backup_directory   /tank/writing/draft_tracker/backups                config file
+backups_to_keep    20                                                 default
+name               draft_tracker                                      default
+```
 
 ## How it is built
 

@@ -26,7 +26,9 @@ csv = "1.4.0"
 dirs = "7.0.0"
 ratatui = "0.30.2"
 rusqlite = { version = "0.40.2", features = ["bundled", "chrono"] }
+serde = { version = "1", features = ["derive"] }
 thiserror = "2.0.21"
+toml = "1"
 
 [profile.release]
 # Whole-program optimization and a single codegen unit: this is a tool built
