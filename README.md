@@ -205,6 +205,8 @@ Backups land beside the database by default. That protects you against mistakes 
 
 Optional. `~/.config/draft_tracker/config.toml`, or wherever `--config` points. `draft-tracker config --init` writes a commented file with every default filled in.
 
+A debug build reads `config.debug.toml` instead, so building from a clone and running it cannot reach the log an installed release build uses. That split is the whole dev/prod separation: the binary you installed is production, anything you `cargo run` is not, and neither can reach the other by default.
+
 ```toml
 database = "/tank/writing/draft_tracker/data/draft_tracker.db"
 backup_directory = "/tank/writing/draft_tracker/backups"
@@ -213,7 +215,7 @@ backups = true
 name = "draft_tracker"
 ```
 
-`name` prefixes backup filenames and defaults to the database's filename, so one directory can hold backups of several logs and a scratch database can never prune the real one's.
+`backup_directory` and `name` describe the database the file names. Point the program somewhere else with `--db` or `DRAFT_TRACKER_DB` and both are worked out from that path instead — backups beside the new database, named after it. So a scratch log cannot write into the real backup directory, and cannot prune the real backups by sharing their prefix. `backups` and `backups_to_keep` are policy rather than description, and do carry across.
 
 A command line option beats an environment variable (`DRAFT_TRACKER_DB`, `DRAFT_TRACKER_BACKUP_DIR`), which beats the file, which beats the default. `draft-tracker config` prints what is in force and **which of those decided it**, which is the quickest way to be certain which log you are about to write to.
 
@@ -222,6 +224,14 @@ database           /tank/writing/draft_tracker/data/draft_tracker.db   config fi
 backup_directory   /tank/writing/draft_tracker/backups                config file
 backups_to_keep    20                                                 default
 name               draft_tracker                                      default
+```
+
+Run it with `--db /tmp/demo.db` and the same command shows the redirect, so there is no guessing about where a scratch session's backups went:
+
+```
+database           /tmp/demo.db                                       command line
+backup_directory   /tmp/backups                                       follows the database
+name               demo                                               follows the database
 ```
 
 ## How it is built

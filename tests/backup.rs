@@ -90,8 +90,19 @@ fn settings_fall_back_to_defaults_when_there_is_no_file() {
         config.backup_directory.value,
         config.database.value.parent().unwrap().join("backups")
     );
-    // And the name comes from the database's filename.
-    assert_eq!(config.name.value, "draft_tracker");
+    // And the name comes from the database's filename, whichever default that
+    // is: a debug build resolves a different default database so that working in
+    // the repository cannot reach an installed build's log.
+    assert_eq!(
+        config.name.value,
+        config
+            .database
+            .value
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap()
+    );
+    assert!(config.name.value.starts_with("draft_tracker"));
 }
 
 #[test]
