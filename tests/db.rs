@@ -335,8 +335,8 @@ fn dashboard_fixture() -> Db {
     let conn = db.conn();
     let fiction = repo::ensure_type(conn, "Fiction").unwrap();
     let nonfic = repo::ensure_type(conn, "Non-Fiction").unwrap();
-    let novel = repo::ensure_category(conn, "SitR Book", fiction).unwrap();
-    let essays = repo::ensure_category(conn, "Non-Fiction Essays", nonfic).unwrap();
+    let novel = repo::ensure_category(conn, "Short Story", fiction).unwrap();
+    let essays = repo::ensure_category(conn, "Essay", nonfic).unwrap();
 
     let a = repo::insert_project(conn, "Novel", Some(novel), Status::Completed, None).unwrap();
     let b = repo::insert_project(conn, "Essay", Some(essays), Status::Open, None).unwrap();
@@ -631,7 +631,7 @@ fn usage_counts_come_back_with_categories_and_types() {
     let fiction = repo::ensure_type(conn, "Fiction").unwrap();
     repo::ensure_type(conn, "Non-Fiction").unwrap();
     let story = repo::ensure_category(conn, "Short Story", fiction).unwrap();
-    repo::ensure_category(conn, "Kids Book", fiction).unwrap();
+    repo::ensure_category(conn, "Flash Fiction", fiction).unwrap();
     repo::insert_project(conn, "A", Some(story), Status::Open, None).unwrap();
     repo::insert_project(conn, "B", Some(story), Status::Open, None).unwrap();
 
@@ -644,7 +644,7 @@ fn usage_counts_come_back_with_categories_and_types() {
     assert_eq!(story_row.type_name, "Fiction");
     let kids = cats
         .iter()
-        .find(|c| c.category.name == "Kids Book")
+        .find(|c| c.category.name == "Flash Fiction")
         .unwrap();
     assert_eq!(kids.project_count, 0);
 

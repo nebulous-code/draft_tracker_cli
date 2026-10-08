@@ -76,15 +76,15 @@ fn app_with_projects() -> App {
     {
         let conn = db.conn();
         let fiction = repo::ensure_type(conn, "Fiction").unwrap();
-        let book = repo::ensure_category(conn, "SitR Book", fiction).unwrap();
+        let book = repo::ensure_category(conn, "Short Story", fiction).unwrap();
 
-        let fireside =
-            repo::insert_project(conn, "Fireside 1", Some(book), Status::Open, None).unwrap();
+        let glasshouse =
+            repo::insert_project(conn, "Glasshouse", Some(book), Status::Open, None).unwrap();
         repo::insert_entry(
             conn,
             &NewEntry {
                 entry_date: day(2026, 1, 12),
-                project_id: fireside,
+                project_id: glasshouse,
                 session_word_count: 15_429,
                 hours: 22.75,
                 notes: None,
@@ -131,7 +131,7 @@ fn the_picker_opens_on_open_projects_only() {
         .iter()
         .map(|c| c.title.as_str())
         .collect();
-    assert_eq!(titles, vec!["Brand New", "Fireside 1"]);
+    assert_eq!(titles, vec!["Brand New", "Glasshouse"]);
 }
 
 #[test]
@@ -147,9 +147,9 @@ fn capital_a_widens_the_picker_to_every_project() {
 #[test]
 fn widening_the_picker_keeps_the_cursor_on_the_same_project() {
     let mut app = app_with_projects();
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
     app.on_key(ch('A')).unwrap();
-    assert_eq!(app.form.selected_project().unwrap().title, "Fireside 1");
+    assert_eq!(app.form.selected_project().unwrap().title, "Glasshouse");
 }
 
 #[test]
@@ -157,9 +157,9 @@ fn the_filter_narrows_the_picker_and_escape_clears_it() {
     let mut app = app_with_projects();
     app.on_key(ch('/')).unwrap();
     assert_eq!(app.form.mode, Mode::Filter);
-    type_str(&mut app, "fire");
+    type_str(&mut app, "glass");
     assert_eq!(app.form.visible().len(), 1);
-    assert_eq!(app.form.selected_project().unwrap().title, "Fireside 1");
+    assert_eq!(app.form.selected_project().unwrap().title, "Glasshouse");
 
     app.on_key(key(KeyCode::Esc)).unwrap();
     assert_eq!(app.form.mode, Mode::Normal);
@@ -232,8 +232,8 @@ fn the_project_field_is_reached_by_tab_and_entered_with_i() {
     // typing when there are dozens of projects.
     app.on_key(ch('i')).unwrap();
     assert_eq!(app.form.mode, Mode::Filter);
-    type_str(&mut app, "fire");
-    assert_eq!(app.form.selected_project().unwrap().title, "Fireside 1");
+    type_str(&mut app, "glass");
+    assert_eq!(app.form.selected_project().unwrap().title, "Glasshouse");
 }
 
 // ------------------------------------------------------------ fields
@@ -281,7 +281,7 @@ fn the_date_defaults_to_today() {
 #[test]
 fn a_typed_total_is_measured_against_what_is_already_logged() {
     let mut app = app_with_projects();
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
     focus(&mut app, Field::ProjectWords);
     app.on_key(ch('i')).unwrap();
     type_str(&mut app, "15682");
@@ -323,7 +323,7 @@ fn words_per_hour_normalises_a_short_session() {
 #[test]
 fn a_revision_day_previews_a_negative_session_and_a_negative_rate() {
     let mut app = app_with_projects();
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
     focus(&mut app, Field::Hours);
     app.on_key(ch('i')).unwrap();
     type_str(&mut app, "1");
@@ -402,7 +402,7 @@ fn an_unparseable_field_is_named() {
 #[test]
 fn leader_enter_writes_the_entry_and_clears_the_session_fields() {
     let mut app = app_with_projects();
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
     focus(&mut app, Field::Hours);
     app.on_key(ch('i')).unwrap();
     type_str(&mut app, "1");
@@ -445,7 +445,7 @@ fn leader_enter_writes_the_entry_and_clears_the_session_fields() {
 #[test]
 fn the_running_total_updates_so_the_next_entry_measures_correctly() {
     let mut app = app_with_projects();
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
     assert_eq!(app.form.selected_project().unwrap().logged_words, 15_429);
 
     focus(&mut app, Field::Hours);
@@ -459,7 +459,7 @@ fn the_running_total_updates_so_the_next_entry_measures_correctly() {
     app.on_key(ch(' ')).unwrap();
     app.on_key(key(KeyCode::Enter)).unwrap();
 
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
     assert_eq!(app.form.selected_project().unwrap().logged_words, 15_682);
 }
 
@@ -589,7 +589,7 @@ fn render(app: &mut App, width: u16, height: u16) -> Vec<String> {
 #[test]
 fn the_entry_form_shows_the_figures_it_worked_out() {
     let mut app = app_with_projects();
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
     focus(&mut app, Field::Hours);
     app.on_key(ch('i')).unwrap();
     type_str(&mut app, "1");
@@ -602,7 +602,7 @@ fn the_entry_form_shows_the_figures_it_worked_out() {
     let screen = render(&mut app, 86, 22).join("\n");
     for expected in [
         "Draft Tracker",
-        "Fireside 1",
+        "Glasshouse",
         "Session WC",
         "253",
         "Words/Hour",
@@ -637,7 +637,7 @@ fn a_first_entry_is_labelled_on_screen_rather_than_only_in_the_arithmetic() {
 #[test]
 fn a_negative_session_is_spelled_out_on_screen() {
     let mut app = app_with_projects();
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
     focus(&mut app, Field::ProjectWords);
     app.on_key(ch('i')).unwrap();
     type_str(&mut app, "14099");
@@ -689,7 +689,7 @@ fn show_the_first_entry_form() {
 #[test]
 fn show_the_entry_form() {
     let mut app = app_with_projects();
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
     let _ = &app;
     focus(&mut app, Field::Hours);
     app.on_key(ch('i')).unwrap();
@@ -715,11 +715,11 @@ fn app_with_history() -> App {
     {
         let conn = db.conn();
         let fiction = repo::ensure_type(conn, "Fiction").unwrap();
-        let book = repo::ensure_category(conn, "SitR Book", fiction).unwrap();
+        let book = repo::ensure_category(conn, "Short Story", fiction).unwrap();
         let novel =
-            repo::insert_project(conn, "Fireside 1", Some(book), Status::Open, None).unwrap();
+            repo::insert_project(conn, "Glasshouse", Some(book), Status::Open, None).unwrap();
         let story =
-            repo::insert_project(conn, "Glowstones", Some(book), Status::Open, None).unwrap();
+            repo::insert_project(conn, "Matchlight", Some(book), Status::Open, None).unwrap();
 
         let add = |project_id, d: (i32, u32, u32), words, hours, note: Option<&str>| {
             repo::insert_entry(
@@ -780,7 +780,7 @@ fn the_history_filters_by_project() {
     let mut app = app_with_history();
     to_history(&mut app);
     app.on_key(ch('/')).unwrap();
-    type_str(&mut app, "glow");
+    type_str(&mut app, "match");
     assert_eq!(app.history.visible().len(), 1);
     app.on_key(key(KeyCode::Esc)).unwrap();
     app.on_key(key(KeyCode::Esc)).unwrap();
@@ -845,7 +845,7 @@ fn a_mistyped_word_count_can_be_corrected() {
     // And the entry form now measures against the corrected total.
     app.on_key(ch(' ')).unwrap();
     app.on_key(ch('e')).unwrap();
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
     assert_eq!(app.form.selected_project().unwrap().logged_words, 2_253);
 }
 
@@ -1006,7 +1006,7 @@ fn quitting_with_an_open_changed_edit_asks_first() {
 #[test]
 fn an_entry_added_on_the_form_appears_in_the_history() {
     let mut app = app_with_history();
-    select_title(&mut app, "Glowstones");
+    select_title(&mut app, "Matchlight");
     focus(&mut app, Field::Hours);
     app.on_key(ch('i')).unwrap();
     type_str(&mut app, "0.75");
@@ -1037,7 +1037,7 @@ fn the_history_screen_renders_its_columns() {
     for expected in [
         "Entries (3)",
         "2026-01-14",
-        "Fireside 1",
+        "Glasshouse",
         "20,000",
         "1.00h",
         "meant 2,000",
@@ -1080,7 +1080,7 @@ fn the_delete_prompt_names_what_would_go() {
     app.on_key(ch('d')).unwrap();
     let screen = render(&mut app, 100, 18).join("\n");
     assert!(
-        screen.contains("delete 20,000 words on Fireside 1"),
+        screen.contains("delete 20,000 words on Glasshouse"),
         "got:\n{screen}"
     );
     assert!(screen.contains("y deletes"), "got:\n{screen}");
@@ -1181,13 +1181,13 @@ fn the_projects_screen_shows_the_derived_figures() {
         .projects
         .visible()
         .iter()
-        .find(|r| r.project.title == "Fireside 1")
+        .find(|r| r.project.title == "Glasshouse")
         .copied()
         .cloned()
         .unwrap();
     assert_eq!(row.metrics.total_word_count, 20_253);
     assert_eq!(row.metrics.entry_count, 2);
-    assert_eq!(row.category_name.as_deref(), Some("SitR Book"));
+    assert_eq!(row.category_name.as_deref(), Some("Short Story"));
 }
 
 /// The projects screen opens on the open projects, because a writing life
@@ -1208,7 +1208,7 @@ fn the_projects_screen_shows_only_open_projects_by_default() {
         .iter()
         .map(|r| r.project.title.as_str())
         .collect();
-    assert_eq!(titles, vec!["Fireside 1", "Glowstones"]);
+    assert_eq!(titles, vec!["Glasshouse", "Matchlight"]);
     assert_eq!(app.projects.total(), 4);
 
     app.on_key(ch('A')).unwrap();
@@ -1242,14 +1242,14 @@ fn the_title_says_which_view_so_a_short_list_is_not_mistaken_for_missing_data() 
 fn a_project_stays_in_view_while_its_status_is_being_cycled() {
     let mut app = app_with_history();
     to_screen(&mut app, 'p', Screen::Projects);
-    select_project(&mut app, "Fireside 1");
+    select_project(&mut app, "Glasshouse");
 
     app.on_key(ch('x')).unwrap();
     assert_eq!(
         app.projects
             .selected_row()
             .map(|r| r.project.title.as_str()),
-        Some("Fireside 1"),
+        Some("Glasshouse"),
         "the row the cursor is on must not disappear mid-cycle"
     );
     assert_eq!(
@@ -1274,7 +1274,7 @@ fn a_project_stays_in_view_while_its_status_is_being_cycled() {
 fn a_closed_project_leaves_the_open_view_once_the_cursor_moves_on() {
     let mut app = app_with_history();
     to_screen(&mut app, 'p', Screen::Projects);
-    select_project(&mut app, "Fireside 1");
+    select_project(&mut app, "Glasshouse");
     app.on_key(ch('x')).unwrap(); // completed, held in view
     assert_eq!(app.projects.visible().len(), 2);
 
@@ -1283,7 +1283,7 @@ fn a_closed_project_leaves_the_open_view_once_the_cursor_moves_on() {
         app.projects
             .selected_row()
             .map(|r| r.project.title.as_str()),
-        Some("Glowstones"),
+        Some("Matchlight"),
         "the cursor lands where it was sent, not where the shrinking list moved it"
     );
     assert_eq!(
@@ -1298,7 +1298,7 @@ fn a_closed_project_leaves_the_open_view_once_the_cursor_moves_on() {
 fn an_empty_open_view_points_at_the_key_that_widens_it() {
     let mut app = app_with_history();
     to_screen(&mut app, 'p', Screen::Projects);
-    for title in ["Fireside 1", "Glowstones"] {
+    for title in ["Glasshouse", "Matchlight"] {
         select_project(&mut app, title);
         app.on_key(ch('x')).unwrap();
         app.on_key(ch('G')).unwrap();
@@ -1312,7 +1312,7 @@ fn an_empty_open_view_points_at_the_key_that_widens_it() {
 fn x_cycles_a_projects_status_without_opening_a_panel() {
     let mut app = app_with_history();
     to_screen(&mut app, 'p', Screen::Projects);
-    select_project(&mut app, "Fireside 1");
+    select_project(&mut app, "Glasshouse");
     assert_eq!(
         app.projects.selected_row().unwrap().project.status,
         Status::Open
@@ -1343,7 +1343,7 @@ fn a_status_change_reaches_the_entry_pickers_list_of_open_projects() {
     let mut app = app_with_history();
     assert_eq!(app.form.visible().len(), 2);
     to_screen(&mut app, 'p', Screen::Projects);
-    select_project(&mut app, "Glowstones");
+    select_project(&mut app, "Matchlight");
     app.on_key(ch('x')).unwrap(); // completed
     to_screen(&mut app, 'e', Screen::Entry);
     let titles: Vec<&str> = app
@@ -1354,7 +1354,7 @@ fn a_status_change_reaches_the_entry_pickers_list_of_open_projects() {
         .collect();
     assert_eq!(
         titles,
-        vec!["Fireside 1"],
+        vec!["Glasshouse"],
         "a completed project leaves the picker"
     );
 }
@@ -1408,7 +1408,7 @@ fn a_duplicate_title_is_reported_by_name() {
     let mut app = app_with_history();
     to_screen(&mut app, 'p', Screen::Projects);
     app.on_key(ch('o')).unwrap();
-    type_str(&mut app, "Fireside 1");
+    type_str(&mut app, "Glasshouse");
     app.on_key(key(KeyCode::Esc)).unwrap();
     app.on_key(ch(' ')).unwrap();
     app.on_key(key(KeyCode::Enter)).unwrap();
@@ -1430,7 +1430,7 @@ fn a_duplicate_title_is_reported_by_name() {
 fn h_and_l_step_the_category_and_status_choices() {
     let mut app = app_with_history();
     to_screen(&mut app, 'p', Screen::Projects);
-    select_project(&mut app, "Fireside 1");
+    select_project(&mut app, "Glasshouse");
     app.on_key(ch('i')).unwrap();
     focus_project_field(&mut app, PField::Category);
 
@@ -1473,7 +1473,7 @@ fn typing_into_a_choice_field_explains_itself_instead_of_doing_nothing() {
 fn deleting_a_project_with_entries_is_refused_outright() {
     let mut app = app_with_history();
     to_screen(&mut app, 'p', Screen::Projects);
-    select_project(&mut app, "Fireside 1");
+    select_project(&mut app, "Glasshouse");
     app.on_key(ch('d')).unwrap();
     app.on_key(ch('d')).unwrap();
 
@@ -1517,13 +1517,13 @@ fn the_projects_filter_matches_title_or_category() {
     let mut app = app_with_history();
     to_screen(&mut app, 'p', Screen::Projects);
     app.on_key(ch('/')).unwrap();
-    type_str(&mut app, "glow");
+    type_str(&mut app, "match");
     assert_eq!(app.projects.visible().len(), 1);
     app.on_key(key(KeyCode::Esc)).unwrap();
     app.on_key(key(KeyCode::Esc)).unwrap();
 
     app.on_key(ch('/')).unwrap();
-    type_str(&mut app, "sitr book");
+    type_str(&mut app, "short story");
     assert_eq!(
         app.projects.visible().len(),
         2,
@@ -1535,12 +1535,12 @@ fn the_projects_filter_matches_title_or_category() {
 fn the_projects_screen_renders_its_columns_and_details() {
     let mut app = app_with_history();
     to_screen(&mut app, 'p', Screen::Projects);
-    select_project(&mut app, "Fireside 1");
+    select_project(&mut app, "Glasshouse");
     let screen = render(&mut app, 100, 24).join("\n");
     for expected in [
         "Projects (2 open of 2)",
-        "Fireside 1",
-        "SitR Book",
+        "Glasshouse",
+        "Short Story",
         "open",
         "20,253",
         "Words per hour",
@@ -1597,14 +1597,14 @@ fn a_type_can_be_created_in_the_types_pane() {
     to_screen(&mut app, 'c', Screen::Categories);
     app.on_key(key(KeyCode::Tab)).unwrap();
     app.on_key(ch('o')).unwrap();
-    type_str(&mut app, "Creative NF");
+    type_str(&mut app, "Non-Fiction");
     app.on_key(key(KeyCode::Esc)).unwrap();
     app.on_key(ch(' ')).unwrap();
     app.on_key(key(KeyCode::Enter)).unwrap();
 
     assert_eq!(app.categories.type_rows().len(), 2);
     assert!(
-        repo::type_id_by_name(app.db.conn(), "Creative NF")
+        repo::type_id_by_name(app.db.conn(), "Non-Fiction")
             .unwrap()
             .is_some()
     );
@@ -1619,7 +1619,7 @@ fn a_category_is_created_under_a_type_and_can_be_moved_between_types() {
     }
     to_screen(&mut app, 'c', Screen::Categories);
     app.on_key(ch('o')).unwrap();
-    type_str(&mut app, "Non-Fiction Essays");
+    type_str(&mut app, "Essay");
     app.on_key(key(KeyCode::Esc)).unwrap();
     app.on_key(key(KeyCode::Tab)).unwrap(); // to the Type field
     let before = app
@@ -1640,10 +1640,7 @@ fn a_category_is_created_under_a_type_and_can_be_moved_between_types() {
     app.on_key(ch(' ')).unwrap();
     app.on_key(key(KeyCode::Enter)).unwrap();
     let rows = repo::list_categories_with_usage(app.db.conn()).unwrap();
-    let created = rows
-        .iter()
-        .find(|r| r.category.name == "Non-Fiction Essays")
-        .unwrap();
+    let created = rows.iter().find(|r| r.category.name == "Essay").unwrap();
     assert_eq!(created.type_name, after);
 }
 
@@ -1719,10 +1716,10 @@ fn renaming_a_category_shows_up_on_the_projects_screen() {
     to_screen(&mut app, 'c', Screen::Categories);
     app.on_key(ch('i')).unwrap();
     app.on_key(ch('i')).unwrap();
-    for _ in 0.."SitR Book".len() {
+    for _ in 0.."Short Story".len() {
         app.on_key(key(KeyCode::Backspace)).unwrap();
     }
-    type_str(&mut app, "SitR Novel");
+    type_str(&mut app, "Novel");
     app.on_key(key(KeyCode::Esc)).unwrap();
     app.on_key(ch(' ')).unwrap();
     app.on_key(key(KeyCode::Enter)).unwrap();
@@ -1732,7 +1729,7 @@ fn renaming_a_category_shows_up_on_the_projects_screen() {
         app.projects
             .visible()
             .iter()
-            .all(|r| r.category_name.as_deref() == Some("SitR Novel")),
+            .all(|r| r.category_name.as_deref() == Some("Novel")),
         "the projects screen must not be showing a stale category name"
     );
 }
@@ -1768,7 +1765,7 @@ fn the_help_overlay_changes_with_the_screen() {
 fn show_the_projects_screen() {
     let mut app = app_with_history();
     to_screen(&mut app, 'p', Screen::Projects);
-    select_project(&mut app, "Fireside 1");
+    select_project(&mut app, "Glasshouse");
     for line in render(&mut app, 96, 20) {
         println!("|{line}");
     }
@@ -1793,16 +1790,16 @@ fn app_with_years() -> App {
         let conn = db.conn();
         let fiction = repo::ensure_type(conn, "Fiction").unwrap();
         let nonfic = repo::ensure_type(conn, "Non-Fiction").unwrap();
-        let book = repo::ensure_category(conn, "SitR Book", fiction).unwrap();
-        let essays = repo::ensure_category(conn, "Non-Fiction Essays", nonfic).unwrap();
+        let book = repo::ensure_category(conn, "Short Story", fiction).unwrap();
+        let essays = repo::ensure_category(conn, "Essay", nonfic).unwrap();
 
         let novel =
-            repo::insert_project(conn, "Trial of Mist", Some(book), Status::Completed, None)
+            repo::insert_project(conn, "The Last Ferry", Some(book), Status::Completed, None)
                 .unwrap();
-        let essay =
-            repo::insert_project(conn, "Utopia", Some(essays), Status::Abandoned, None).unwrap();
+        let essay = repo::insert_project(conn, "Thumbprint", Some(essays), Status::Abandoned, None)
+            .unwrap();
         let live =
-            repo::insert_project(conn, "Fireside 1", Some(book), Status::Open, None).unwrap();
+            repo::insert_project(conn, "Glasshouse", Some(book), Status::Open, None).unwrap();
 
         let add = |project_id, d: (i32, u32, u32), words, hours| {
             repo::insert_entry(
@@ -2027,7 +2024,7 @@ fn the_year_graph_shows_only_that_years_projects_with_their_status() {
     let titles: Vec<&str> = bars.iter().map(|b| b.title.as_str()).collect();
     assert_eq!(
         titles,
-        vec!["Trial of Mist", "Utopia"],
+        vec!["The Last Ferry", "Thumbprint"],
         "largest first, 2026 excluded"
     );
     assert_eq!(bars[0].status, Status::Completed);
@@ -2057,7 +2054,7 @@ fn the_category_shares_add_up_to_the_whole_year() {
     );
     let book = shares
         .iter()
-        .find(|(name, _, _)| name == "SitR Book")
+        .find(|(name, _, _)| name == "Short Story")
         .unwrap();
     assert!((book.1 - 30_000.0 / 33_000.0).abs() < 1e-9);
 }
@@ -2115,7 +2112,7 @@ fn an_entry_added_on_the_form_shows_up_on_the_dashboard() {
 
     app.on_key(ch(' ')).unwrap();
     app.on_key(ch('e')).unwrap();
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
     focus(&mut app, Field::Hours);
     app.on_key(ch('i')).unwrap();
     type_str(&mut app, "1");
@@ -2139,7 +2136,7 @@ fn a_status_change_moves_the_completed_count() {
 
     app.on_key(ch(' ')).unwrap();
     app.on_key(ch('p')).unwrap();
-    select_project(&mut app, "Fireside 1");
+    select_project(&mut app, "Glasshouse");
     app.on_key(ch('x')).unwrap(); // open -> completed
     to_stats(&mut app);
     assert_eq!(app.stats.lifetime_completed, 2);
@@ -2333,23 +2330,23 @@ fn j_and_k_walk_the_fields_of_every_edit_panel() {
 #[test]
 fn an_entry_can_be_moved_to_another_project() {
     let mut app = app_with_history();
-    let (fireside, glowstones) = {
+    let (glasshouse, matchlight) = {
         let conn = app.db.conn();
         (
-            repo::project_id_by_title(conn, "Fireside 1")
+            repo::project_id_by_title(conn, "Glasshouse")
                 .unwrap()
                 .unwrap(),
-            repo::project_id_by_title(conn, "Glowstones")
+            repo::project_id_by_title(conn, "Matchlight")
                 .unwrap()
                 .unwrap(),
         )
     };
     assert_eq!(
-        repo::project_logged_total(app.db.conn(), fireside).unwrap(),
+        repo::project_logged_total(app.db.conn(), glasshouse).unwrap(),
         20_253
     );
     assert_eq!(
-        repo::project_logged_total(app.db.conn(), glowstones).unwrap(),
+        repo::project_logged_total(app.db.conn(), matchlight).unwrap(),
         880
     );
 
@@ -2359,14 +2356,14 @@ fn an_entry_can_be_moved_to_another_project() {
     focus_edit_field(&mut app, EditField::Project);
     assert_eq!(
         app.history.edit.as_ref().unwrap().project_title,
-        "Fireside 1"
+        "Glasshouse"
     );
 
     // h and l step it, exactly as on the entry form.
     app.on_key(ch('l')).unwrap();
     assert_eq!(
         app.history.edit.as_ref().unwrap().project_title,
-        "Glowstones"
+        "Matchlight"
     );
     app.on_key(ch(' ')).unwrap();
     app.on_key(key(KeyCode::Enter)).unwrap();
@@ -2374,11 +2371,11 @@ fn an_entry_can_be_moved_to_another_project() {
     assert_eq!(app.flash.as_ref().unwrap().tone, Tone::Success);
     // The words move with the entry: both totals change.
     assert_eq!(
-        repo::project_logged_total(app.db.conn(), fireside).unwrap(),
+        repo::project_logged_total(app.db.conn(), glasshouse).unwrap(),
         20_000
     );
     assert_eq!(
-        repo::project_logged_total(app.db.conn(), glowstones).unwrap(),
+        repo::project_logged_total(app.db.conn(), matchlight).unwrap(),
         1_133
     );
 }
@@ -2400,7 +2397,7 @@ fn the_project_picker_only_appears_while_the_project_field_is_in_hand() {
     let with = render(&mut app, 100, 24).join("\n");
     assert!(with.contains("Move to"), "got:\n{with}");
     assert!(
-        with.contains("Glowstones"),
+        with.contains("Matchlight"),
         "the other projects are listed:\n{with}"
     );
     assert!(
@@ -2437,24 +2434,25 @@ fn the_picker_can_be_filtered_by_typing() {
     focus_edit_field(&mut app, EditField::Project);
     app.on_key(ch('i')).unwrap();
     assert_eq!(app.history.edit.as_ref().unwrap().mode, Mode::Filter);
-    type_str(&mut app, "glow");
+    type_str(&mut app, "match");
     assert_eq!(app.history.edit_choices().len(), 1);
     // Typing to find a project lands on it; no extra keystroke needed.
     assert_eq!(
         app.history.edit.as_ref().unwrap().project_title,
-        "Glowstones"
+        "Matchlight"
     );
 
     // Widening the filter leaves the found project pending rather than snapping
-    // back to where it started.
-    for _ in 0..4 {
+    // back to where it started. The count comes from the filter string itself, so
+    // renaming the fixture cannot leave a stray character behind.
+    for _ in 0.."match".len() {
         app.on_key(key(KeyCode::Backspace)).unwrap();
     }
     assert_eq!(app.history.edit.as_ref().unwrap().filter, "");
     assert!(app.history.edit_choices().len() > 1);
     assert_eq!(
         app.history.edit.as_ref().unwrap().project_title,
-        "Glowstones"
+        "Matchlight"
     );
 
     // Esc leaves filtering, and h/l then step the narrowed list.
@@ -2463,7 +2461,7 @@ fn the_picker_can_be_filtered_by_typing() {
     app.on_key(ch('l')).unwrap();
     assert_ne!(
         app.history.edit.as_ref().unwrap().project_title,
-        "Glowstones",
+        "Matchlight",
         "l steps on from wherever the filter left the cursor"
     );
 }
@@ -2475,8 +2473,8 @@ fn leaving_the_project_field_forgets_its_filter() {
     app.on_key(ch('i')).unwrap();
     focus_edit_field(&mut app, EditField::Project);
     app.on_key(ch('i')).unwrap();
-    type_str(&mut app, "glow");
-    assert_eq!(app.history.edit.as_ref().unwrap().filter, "glow");
+    type_str(&mut app, "match");
+    assert_eq!(app.history.edit.as_ref().unwrap().filter, "match");
     app.on_key(key(KeyCode::Esc)).unwrap();
     app.on_key(key(KeyCode::Tab)).unwrap();
     assert_eq!(
@@ -2710,7 +2708,7 @@ impl Drop for TempDb {
 fn app_on_disk(temp: &TempDb) -> App {
     {
         let db = temp.open();
-        let id = repo::insert_project(db.conn(), "Fireside 1", None, Status::Open, None).unwrap();
+        let id = repo::insert_project(db.conn(), "Glasshouse", None, Status::Open, None).unwrap();
         repo::insert_entry(
             db.conn(),
             &NewEntry {
@@ -2729,7 +2727,7 @@ fn app_on_disk(temp: &TempDb) -> App {
 /// Simulate the command line, or a second interface, on its own connection.
 fn other_session_logs(temp: &TempDb, words: i64) {
     let other = temp.open();
-    let id = repo::project_id_by_title(other.conn(), "Fireside 1")
+    let id = repo::project_id_by_title(other.conn(), "Glasshouse")
         .unwrap()
         .unwrap();
     repo::insert_entry(
@@ -2759,7 +2757,7 @@ fn type_into(app: &mut App, field: Field, text: &str) {
 fn a_submit_against_a_stale_total_is_refused_and_recalculated() {
     let temp = TempDb::new("stale");
     let mut app = app_on_disk(&temp);
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
     assert_eq!(app.form.selected_project().unwrap().logged_words, 17_228);
 
     other_session_logs(&temp, 672);
@@ -2795,7 +2793,7 @@ fn a_submit_against_a_stale_total_is_refused_and_recalculated() {
 fn submitting_again_writes_the_corrected_session() {
     let temp = TempDb::new("corrected");
     let mut app = app_on_disk(&temp);
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
     other_session_logs(&temp, 672);
     type_into(&mut app, Field::Hours, "1");
     type_into(&mut app, Field::ProjectWords, "18000");
@@ -2828,7 +2826,7 @@ fn submitting_again_writes_the_corrected_session() {
 fn two_submits_in_a_row_are_not_mistaken_for_outside_interference() {
     let temp = TempDb::new("own");
     let mut app = app_on_disk(&temp);
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
 
     type_into(&mut app, Field::Hours, "1");
     type_into(&mut app, Field::ProjectWords, "17500");
@@ -2840,7 +2838,7 @@ fn two_submits_in_a_row_are_not_mistaken_for_outside_interference() {
         "first submit"
     );
 
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
     type_into(&mut app, Field::Hours, "1");
     type_into(&mut app, Field::ProjectWords, "18000");
     app.on_key(ch(' ')).unwrap();
@@ -2878,7 +2876,7 @@ fn changing_screen_picks_up_what_another_session_wrote() {
         app.projects
             .visible()
             .iter()
-            .find(|r| r.project.title == "Fireside 1")
+            .find(|r| r.project.title == "Glasshouse")
             .unwrap()
             .metrics
             .total_word_count,
@@ -2910,7 +2908,7 @@ fn app_with_backups(dir: &BackupDir) -> App {
     let config = dir.config();
     {
         let db = Db::open(config.database()).unwrap();
-        let id = repo::insert_project(db.conn(), "Fireside 1", None, Status::Open, None).unwrap();
+        let id = repo::insert_project(db.conn(), "Glasshouse", None, Status::Open, None).unwrap();
         repo::insert_entry(
             db.conn(),
             &NewEntry {
@@ -2946,7 +2944,7 @@ fn saving_an_entry_takes_a_backup() {
     let mut app = app_with_backups(&dir);
     assert_eq!(dir.backups().len(), 1);
 
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
     type_into(&mut app, Field::Hours, "1");
     type_into(&mut app, Field::ProjectWords, "1500");
     app.on_key(ch(' ')).unwrap();
@@ -2987,12 +2985,12 @@ fn turning_backups_off_writes_nothing() {
     let config = dir.config().with_backups(false);
     {
         let db = Db::open(config.database()).unwrap();
-        repo::insert_project(db.conn(), "Fireside 1", None, Status::Open, None).unwrap();
+        repo::insert_project(db.conn(), "Glasshouse", None, Status::Open, None).unwrap();
     }
     let mut app = App::new(Db::open(config.database()).unwrap(), config).unwrap();
     assert!(dir.backups().is_empty(), "opening took one anyway");
 
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
     type_into(&mut app, Field::Hours, "1");
     type_into(&mut app, Field::ProjectWords, "900");
     app.on_key(ch(' ')).unwrap();
@@ -3020,7 +3018,7 @@ fn a_failing_backup_on_open_warns_without_stopping_anything() {
     );
     {
         let db = Db::open(config.database()).unwrap();
-        repo::insert_project(db.conn(), "Fireside 1", None, Status::Open, None).unwrap();
+        repo::insert_project(db.conn(), "Glasshouse", None, Status::Open, None).unwrap();
     }
     let app = App::new(Db::open(config.database()).unwrap(), config).unwrap();
     let flash = app.flash.as_ref().expect("a warning");
@@ -3045,11 +3043,11 @@ fn a_failing_backup_on_save_still_saves_the_entry() {
     );
     {
         let db = Db::open(config.database()).unwrap();
-        repo::insert_project(db.conn(), "Fireside 1", None, Status::Open, None).unwrap();
+        repo::insert_project(db.conn(), "Glasshouse", None, Status::Open, None).unwrap();
     }
     let mut app = App::new(Db::open(config.database()).unwrap(), config).unwrap();
 
-    select_title(&mut app, "Fireside 1");
+    select_title(&mut app, "Glasshouse");
     type_into(&mut app, Field::Hours, "1");
     type_into(&mut app, Field::ProjectWords, "640");
     app.on_key(ch(' ')).unwrap();
@@ -3080,12 +3078,12 @@ fn backups_are_pruned_to_the_configured_count() {
     );
     {
         let db = Db::open(config.database()).unwrap();
-        repo::insert_project(db.conn(), "Fireside 1", None, Status::Open, None).unwrap();
+        repo::insert_project(db.conn(), "Glasshouse", None, Status::Open, None).unwrap();
     }
     let mut app = App::new(Db::open(config.database()).unwrap(), config).unwrap();
 
     for total in ["100", "200", "300"] {
-        select_title(&mut app, "Fireside 1");
+        select_title(&mut app, "Glasshouse");
         type_into(&mut app, Field::Hours, "1");
         type_into(&mut app, Field::ProjectWords, total);
         app.on_key(ch(' ')).unwrap();

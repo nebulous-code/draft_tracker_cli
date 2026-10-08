@@ -265,13 +265,13 @@ fn a_projects_category_is_the_majority_of_its_rows() {
         "log.csv",
         &format!(
             "{HEADERS}\n\
-             2026-01-01,A,SitR Book,Fiction,100,1.0,100,\n\
-             2026-01-02,A,SitR Book,Fiction,100,1.0,200,\n\
-             2026-01-03,A,Kids Book,Fiction,100,1.0,300,a mislabelled row\n"
+             2026-01-01,A,Short Story,Fiction,100,1.0,100,\n\
+             2026-01-02,A,Short Story,Fiction,100,1.0,200,\n\
+             2026-01-03,A,Flash Fiction,Fiction,100,1.0,300,a mislabelled row\n"
         ),
     );
     let plan = import::plan(dir.path()).unwrap();
-    assert_eq!(plan.projects[0].category.as_deref(), Some("SitR Book"));
+    assert_eq!(plan.projects[0].category.as_deref(), Some("Short Story"));
 }
 
 #[test]
@@ -281,17 +281,17 @@ fn a_category_type_is_the_majority_of_the_rows_carrying_it() {
         "log.csv",
         &format!(
             "{HEADERS}\n\
-             2026-01-01,A,SitR Blog Post,Creative NF,100,1.0,100,\n\
-             2026-01-02,A,SitR Blog Post,Creative NF,100,1.0,200,\n\
-             2026-01-03,A,SitR Blog Post,Non-fiction,100,1.0,300,a slip\n"
+             2026-01-01,A,Blog Post,Non-Fiction,100,1.0,100,\n\
+             2026-01-02,A,Blog Post,Non-Fiction,100,1.0,200,\n\
+             2026-01-03,A,Blog Post,Fiction,100,1.0,300,a slip\n"
         ),
     );
     let plan = import::plan(dir.path()).unwrap();
     assert_eq!(
         plan.categories,
-        vec![("SitR Blog Post".into(), "Creative NF".into())]
+        vec![("Blog Post".into(), "Non-Fiction".into())]
     );
-    assert_eq!(plan.types, vec!["Creative NF"]);
+    assert_eq!(plan.types, vec!["Non-Fiction"]);
 }
 
 #[test]
@@ -333,8 +333,8 @@ fn repeated_whitespace_in_a_name_is_collapsed_and_reported() {
         "log.csv",
         &format!(
             "{HEADERS}\n\
-             2026-01-01,A,SitR Book,Fiction,100,1.0,100,\n\
-             2026-01-02,A,\"SitR  Book\",Fiction,100,1.0,200,typo\n"
+             2026-01-01,A,Short Story,Fiction,100,1.0,100,\n\
+             2026-01-02,A,\"Short  Story\",Fiction,100,1.0,200,typo\n"
         ),
     );
     let plan = import::plan(dir.path()).unwrap();
@@ -343,7 +343,7 @@ fn repeated_whitespace_in_a_name_is_collapsed_and_reported() {
     let (_, before, after) = &plan.report.names_collapsed[0];
     assert_eq!(
         (before.as_str(), after.as_str()),
-        ("SitR  Book", "SitR Book")
+        ("Short  Story", "Short Story")
     );
 }
 
@@ -465,11 +465,11 @@ fn a_project_tracked_across_two_files_becomes_one_record() {
     let dir = Dir::new();
     dir.write(
         "a_2025.csv",
-        &format!("{HEADERS}\n2025-12-31,Long Novel,SitR Book,Fiction,1000,2.0,1000,\n"),
+        &format!("{HEADERS}\n2025-12-31,Long Novel,Short Story,Fiction,1000,2.0,1000,\n"),
     );
     dir.write(
         "b_2026.csv",
-        &format!("{HEADERS}\n2026-01-01,Long Novel,SitR Book,Fiction,500,1.0,1500,\n"),
+        &format!("{HEADERS}\n2026-01-01,Long Novel,Short Story,Fiction,500,1.0,1500,\n"),
     );
     let mut db = Db::open_in_memory().unwrap();
     import::run(&mut db, dir.path(), Existing::Refuse).unwrap();
@@ -523,9 +523,9 @@ fn two_runs_over_the_same_sources_agree_exactly() {
         "log.csv",
         &format!(
             "{HEADERS}\n\
-             2026-01-01,A,SitR Book,Fiction,100,1.0,100,\n\
-             2026-01-01,B,Kids Book,Fiction,200,1.0,200,\n\
-             2026-01-02,A,SitR Book,Fiction,300,1.0,400,\n"
+             2026-01-01,A,Short Story,Fiction,100,1.0,100,\n\
+             2026-01-01,B,Flash Fiction,Fiction,200,1.0,200,\n\
+             2026-01-02,A,Short Story,Fiction,300,1.0,400,\n"
         ),
     );
     let first = import::plan(dir.path()).unwrap();

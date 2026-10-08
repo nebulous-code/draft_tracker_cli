@@ -27,15 +27,15 @@ fn seeded() -> Db {
     {
         let conn = db.conn();
         let fiction = repo::ensure_type(conn, "Fiction").unwrap();
-        let book = repo::ensure_category(conn, "SitR Book", fiction).unwrap();
+        let book = repo::ensure_category(conn, "Short Story", fiction).unwrap();
 
-        let fireside =
-            repo::insert_project(conn, "Fireside 1", Some(book), Status::Open, None).unwrap();
+        let glasshouse =
+            repo::insert_project(conn, "Glasshouse", Some(book), Status::Open, None).unwrap();
         repo::insert_entry(
             conn,
             &NewEntry {
                 entry_date: day(2026, 1, 12),
-                project_id: fireside,
+                project_id: glasshouse,
                 session_word_count: 17_228,
                 hours: 25.75,
                 notes: None,
@@ -43,11 +43,11 @@ fn seeded() -> Db {
         )
         .unwrap();
 
-        repo::insert_project(conn, "Glowstones", Some(book), Status::Open, None).unwrap();
+        repo::insert_project(conn, "Matchlight", Some(book), Status::Open, None).unwrap();
         repo::insert_project(conn, "Brand New", Some(book), Status::Open, None).unwrap();
-        repo::insert_project(conn, "Flask Vol 1", Some(book), Status::Completed, None).unwrap();
+        repo::insert_project(conn, "Low Tide Vol 1", Some(book), Status::Completed, None).unwrap();
         // A title that is wholly contained in another, to pin exact-match-wins.
-        repo::insert_project(conn, "Flask", Some(book), Status::Open, None).unwrap();
+        repo::insert_project(conn, "Low Tide", Some(book), Status::Open, None).unwrap();
     }
     db
 }
@@ -63,34 +63,38 @@ fn summary(planned: &cli::Planned) -> String {
 #[test]
 fn a_partial_title_is_enough() {
     let db = seeded();
-    let planned = cli::plan(&db, &request("fire", 17_900, 1.0)).unwrap();
-    assert_eq!(planned.project_title, "Fireside 1");
+    let planned = cli::plan(&db, &request("glass", 17_900, 1.0)).unwrap();
+    assert_eq!(planned.project_title, "Glasshouse");
 }
 
 #[test]
 fn matching_ignores_case() {
     let db = seeded();
     assert_eq!(
-        cli::plan(&db, &request("GLOWSTONES", 100, 1.0))
+        cli::plan(&db, &request("MATCHLIGHT", 100, 1.0))
             .unwrap()
             .project_title,
-        "Glowstones"
+        "Matchlight"
     );
 }
 
 /// Without this, a project whose name sits inside another's could never be
-/// named: "Flask" would always be ambiguous against "Flask Vol 1".
+/// named: "Low Tide" would always be ambiguous against "Low Tide Vol 1".
 #[test]
 fn an_exact_title_wins_over_a_longer_one_containing_it() {
     let db = seeded();
-    let planned = cli::plan(&db, &request("Flask", 500, 1.0)).unwrap();
-    assert_eq!(planned.project_title, "Flask");
+    let planned = cli::plan(&db, &request("Low Tide", 500, 1.0)).unwrap();
+    assert_eq!(planned.project_title, "Low Tide");
 }
 
 #[test]
 fn an_ambiguous_fragment_is_refused_with_the_candidates() {
     let db = seeded();
-    let error = cli::plan(&db, &request("n", 100, 1.0)).unwrap_err();
+    // "a" is in Glasshouse, Matchlight and Brand New, so it cannot resolve. Named
+    // here because the fragment's ambiguity depends on the fixture's titles, and a
+    // rename that quietly made it unique would turn this test green for the wrong
+    // reason.
+    let error = cli::plan(&db, &request("a", 100, 1.0)).unwrap_err();
     match error {
         LogError::Ambiguous { matches, .. } => {
             assert!(matches.len() > 1, "got {matches:?}");
@@ -109,9 +113,9 @@ fn an_unknown_project_lists_the_open_ones() {
     let error = cli::plan(&db, &request("nothing like this", 100, 1.0)).unwrap_err();
     match error {
         LogError::NoMatch { open, .. } => {
-            assert!(open.contains(&"Fireside 1".to_string()), "got {open:?}");
+            assert!(open.contains(&"Glasshouse".to_string()), "got {open:?}");
             assert!(
-                !open.contains(&"Flask Vol 1".to_string()),
+                !open.contains(&"Low Tide Vol 1".to_string()),
                 "a completed project is not an open one: {open:?}"
             );
         }
@@ -123,10 +127,10 @@ fn an_unknown_project_lists_the_open_ones() {
 #[test]
 fn a_closed_project_says_so_rather_than_claiming_it_does_not_exist() {
     let db = seeded();
-    let error = cli::plan(&db, &request("Flask Vol", 100, 1.0)).unwrap_err();
+    let error = cli::plan(&db, &request("Low Tide Vol", 100, 1.0)).unwrap_err();
     match error {
         LogError::Closed { title, status } => {
-            assert_eq!(title, "Flask Vol 1");
+            assert_eq!(title, "Low Tide Vol 1");
             assert_eq!(status, Status::Completed);
         }
         other => panic!("expected Closed, got {other:?}"),
@@ -136,9 +140,12 @@ fn a_closed_project_says_so_rather_than_claiming_it_does_not_exist() {
 #[test]
 fn any_allows_logging_against_a_closed_project() {
     let db = seeded();
-    let mut req = request("Flask Vol", 500, 1.0);
+    let mut req = request("Low Tide Vol", 500, 1.0);
     req.include_closed = true;
-    assert_eq!(cli::plan(&db, &req).unwrap().project_title, "Flask Vol 1");
+    assert_eq!(
+        cli::plan(&db, &req).unwrap().project_title,
+        "Low Tide Vol 1"
+    );
 }
 
 #[test]
@@ -155,7 +162,7 @@ fn an_empty_database_says_there_are_no_projects() {
 #[test]
 fn a_typed_total_is_measured_against_what_is_logged() {
     let db = seeded();
-    let planned = cli::plan(&db, &request("fire", 17_900, 1.0)).unwrap();
+    let planned = cli::plan(&db, &request("glass", 17_900, 1.0)).unwrap();
     assert!(!planned.first_entry);
     assert_eq!(planned.logged_before, 17_228);
     assert_eq!(planned.session_words, 672);
@@ -178,7 +185,7 @@ fn a_first_entry_takes_the_number_as_the_session() {
 #[test]
 fn a_revision_day_is_allowed_and_spelled_out() {
     let db = seeded();
-    let planned = cli::plan(&db, &request("fire", 16_000, 1.0)).unwrap();
+    let planned = cli::plan(&db, &request("glass", 16_000, 1.0)).unwrap();
     assert_eq!(planned.session_words, -1_228);
     let text = summary(&planned);
     assert!(text.contains("-1,228"), "got:\n{text}");
@@ -189,7 +196,7 @@ fn a_revision_day_is_allowed_and_spelled_out() {
 fn the_hours_minimum_is_refused_before_anything_else_happens() {
     let db = seeded();
     for hours in [0.0, 0.1, 0.24, -1.0, f64::NAN] {
-        let error = cli::plan(&db, &request("fire", 17_900, hours)).unwrap_err();
+        let error = cli::plan(&db, &request("glass", 17_900, hours)).unwrap_err();
         assert!(
             matches!(error, LogError::HoursTooShort(_)),
             "{hours} gave {error:?}"
@@ -201,13 +208,13 @@ fn the_hours_minimum_is_refused_before_anything_else_happens() {
         cli::plan(&db, &request("nonsense", 1, 0.0)).unwrap_err(),
         LogError::HoursTooShort(_)
     ));
-    assert!(cli::plan(&db, &request("fire", 17_900, MIN_SESSION_HOURS)).is_ok());
+    assert!(cli::plan(&db, &request("glass", 17_900, MIN_SESSION_HOURS)).is_ok());
 }
 
 #[test]
 fn the_summary_shows_the_reference_total_so_a_surprise_can_be_reasoned_about() {
     let db = seeded();
-    let planned = cli::plan(&db, &request("fire", 17_900, 1.0)).unwrap();
+    let planned = cli::plan(&db, &request("glass", 17_900, 1.0)).unwrap();
     let text = summary(&planned);
     assert!(text.contains("logged so far 17,228"), "got:\n{text}");
     assert!(text.contains("Session WC   672"), "got:\n{text}");
@@ -219,14 +226,14 @@ fn the_summary_shows_the_reference_total_so_a_surprise_can_be_reasoned_about() {
 fn planning_writes_nothing() {
     let db = seeded();
     let before = repo::recent_entries(db.conn(), 100).unwrap().len();
-    cli::plan(&db, &request("fire", 17_900, 1.0)).unwrap();
+    cli::plan(&db, &request("glass", 17_900, 1.0)).unwrap();
     assert_eq!(repo::recent_entries(db.conn(), 100).unwrap().len(), before);
 }
 
 #[test]
 fn committing_writes_exactly_what_was_shown() {
     let db = seeded();
-    let mut req = request("fire", 17_900, 1.5);
+    let mut req = request("glass", 17_900, 1.5);
     req.notes = Some("a good morning".into());
     req.date = Some(day(2026, 2, 3));
     let planned = cli::plan(&db, &req).unwrap();
@@ -247,16 +254,16 @@ fn committing_writes_exactly_what_was_shown() {
 #[test]
 fn the_date_defaults_to_today() {
     let db = seeded();
-    let planned = cli::plan(&db, &request("fire", 17_900, 1.0)).unwrap();
+    let planned = cli::plan(&db, &request("glass", 17_900, 1.0)).unwrap();
     assert_eq!(planned.date, Local::now().date_naive());
 }
 
 #[test]
 fn two_sessions_in_a_row_each_measure_against_the_new_total() {
     let db = seeded();
-    let first = cli::plan(&db, &request("fire", 17_900, 1.0)).unwrap();
+    let first = cli::plan(&db, &request("glass", 17_900, 1.0)).unwrap();
     cli::commit(&db, &first).unwrap();
-    let second = cli::plan(&db, &request("fire", 18_400, 1.0)).unwrap();
+    let second = cli::plan(&db, &request("glass", 18_400, 1.0)).unwrap();
     assert_eq!(second.logged_before, 17_900);
     assert_eq!(second.session_words, 500);
 }

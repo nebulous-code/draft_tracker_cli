@@ -36,7 +36,7 @@ impl Scratch {
     /// A database with one project and one entry.
     fn seeded(&self) -> Db {
         let db = Db::open(self.path("draft_tracker.db")).unwrap();
-        repo::insert_project(db.conn(), "Fireside 1", None, Status::Open, None).unwrap();
+        repo::insert_project(db.conn(), "Glasshouse", None, Status::Open, None).unwrap();
         add_entry(&db, 1_000);
         db
     }
@@ -49,7 +49,7 @@ impl Drop for Scratch {
 }
 
 fn add_entry(db: &Db, words: i64) {
-    let id = repo::project_id_by_title(db.conn(), "Fireside 1")
+    let id = repo::project_id_by_title(db.conn(), "Glasshouse")
         .unwrap()
         .unwrap();
     repo::insert_entry(

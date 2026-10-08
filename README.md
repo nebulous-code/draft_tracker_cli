@@ -5,18 +5,18 @@ A writing log kept in SQLite: a terminal interface for reading it, and a one-lin
 You tell it what a manuscript currently stands at, and it works out the session from the difference. That is the whole idea. Counting new words scattered across chapters is tedious and error-prone; reading the word count at the bottom of the document is neither.
 
 ```sh
-$ draft-tracker log fireside 17900 1 -n "a good morning"
-  Project      Fireside 1
-  Date         2026-10-03
+$ draft-tracker log salt 15982 1 -n "a good morning"
+  Project      Salt Lantern
+  Date         2026-10-08
   Hours        1.00
-  Project WC   17,900
-               logged so far 17,228
+  Project WC   15,982
+               logged so far 15,310
   Session WC   672
   Words/Hour   672
   Notes        a good morning
 
 Save this entry? [y/N] y
-Saved. Fireside 1 is now at 17,900 words.
+Saved. Salt Lantern is now at 15,982 words.
 ```
 
 ## Is it for you
@@ -33,16 +33,19 @@ It will import years of existing spreadsheets, which is the only sensible way to
 
 ```
  Draft Tracker · Entry
-┌ Session ───────────────────────────────────────────────┐┌ Projects (8) ────────────────┐
-│ Date        2026-10-03                                 ││  Emotional Evidence          │
-│ Project     Fireside 1  logged so far 17,228           ││› Fireside 1                  │
-│ Hours       1                                          ││  Glowstones                  │
-│▌Project WC  17900                                      ││  Honesty Protocol            │
-│ Notes       —                                          ││  Kathy's Donuts              │
-│                                                        ││  Sandwich Debacle            │
-│  ──────── worked out for you ────────                  ││  SitR Marketing              │
-│ Session WC  672                                        ││  Veterin' Corps              │
+┌ Session ───────────────────────────────────────────────┐┌ Projects (3) ────────────────┐
+│                                                        ││  Low Tide                    │
+│ Date        2026-10-08                                 ││› Salt Lantern                │
+│ Project     Salt Lantern  logged so far 15,310         ││  The Cost of Revision        │
+│ Hours       1                                          ││                              │
+│▌Project WC  15982                                      ││                              │
+│ Notes       —                                          ││                              │
+│                                                        ││                              │
+│  ──────── worked out for you ────────                  ││                              │
+│ Session WC  672                                        ││                              │
 │ Words/Hour  672                                        ││                              │
+│                                                        ││                              │
+│                                                        ││                              │
 └────────────────────────────────────────────────────────┘└──────────────────────────────┘
  NORMAL  Project WC  ·  <leader><CR> submit  ·  ? help  ·  q quit
 ```
@@ -52,28 +55,28 @@ The dashboard answers the questions a spreadsheet makes hard. `j` and `k` walk b
 ```
  Draft Tracker · Stats
 ┌ Lifetime ─────────────────────────────────┐┌ 2025 ─────────────────────────────────────┐
-│ Words       466,665                       ││ Words       186,457                       │
-│ Hours       593.50                        ││ Hours       220.50                        │
-│ Completed   68                            ││ Completed   29                            │
-│ Words/Hour  786                           ││ Words/Hour  846                           │
+│ Words       171,725                       ││ Words       25,858                        │
+│ Hours       188.00                        ││ Hours       27.50                         │
+│ Completed   14                            ││ Completed   6                             │
+│ Words/Hour  913                           ││ Words/Hour  940                           │
 └───────────────────────────────────────────┘└───────────────────────────────────────────┘
-┌ 2025 projects (1–3 of 35) ─────────────────────────────────────────────────────────────┐
-│ Trial of … █████████████████████████████████████████████████████████████████    87,973 │
-│ Flask Vol… ████████████▋                                                        17,095 │
-│ Fireside 1 ███████████▍                                                         15,429 │
+┌ 2025 projects (1–4 of 7) ──────────────────────────────────────────────────────────────┐
+│ Glasshouse █████████████████████████████████████████████████████████████████     7,647 │
+│ The Tin R… ██████████████████████████████████████████████████████████████▌       7,351 │
+│ The Last … █████████████████████████████████████████▍                            4,869 │
+│ Against O… ██████████████████▉                                                   2,220 │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ 2025 by category ──────────────────────────────────────────────────────────────────────┐
-│ █ SitR Book 66.4% (123,790)  █ SitR Short Story 15.7% (29,223)                         │
-│ █ SitR Blog Post 12.0% (22,454)  █ Non-Fiction Essays 4.3% (8,090)                     │
-│ █ Kids Book 0.8% (1,578)  █ SitR Marketing 0.7% (1,322)                                │
+│ █ Short Story 55.1% (14,237)  █ Novel 28.4% (7,351)  █ Essay 8.6% (2,220)              │
+│ █ Blog Post 5.0% (1,300)  █ Flash Fiction 2.9% (750)                                   │
 │████████████████████████████████████████████████████████████████████████████████████████│
 │████████████████████████████████████████████████████████████████████████████████████████│
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ Year over year ────────────────────────────────────────────────────────────────────────┐
-│ 2023 █████████▉                                                                34,261  │
-│ 2024 ██████████████████████████████████████████████████████████████████████   244,148  │
-│ 2025 █████████████████████████████████████████████████████▌                   186,457  │
-│ 2026 ▌                                                                          1,799  │
+│ 2023 ██████████████████████████████████████████████████████████████████████    73,743  │
+│ 2024 ██████████████████████████████████████████████████▌                       53,194  │
+│ 2025 ████████████████████████▌                                                 25,858  │
+│ 2026 ██████████████████                                                        18,930  │
 └────────────────────────────────────────────────────────────────────────────────────────┘
  by year  ·  j k year  ·  h l scroll  ·  0 now  ·  $ all time  ·  ? help  ·  q quit
 ```
@@ -136,7 +139,7 @@ Eighteen projects, 149 sessions, about 172,000 words. It includes the awkward ca
 draft-tracker log <project> <words> <hours> [options]
 ```
 
-The project is matched on any part of its title, case insensitive, against the open projects, so `fire` finds `Fireside 1`. An exact title wins outright, so a project whose name sits inside another's is still reachable. A fragment matching several is refused with the candidates listed; one matching only a finished project says so rather than claiming the project does not exist.
+The project is matched on any part of its title, case insensitive, against the open projects, so `salt` finds `Salt Lantern`. An exact title wins outright, so a project whose name sits inside another's is still reachable. A fragment matching several is refused with the candidates listed; one matching only a finished project says so rather than claiming the project does not exist.
 
 The word count is the project's new running total. On a project's first entry there is no earlier total to subtract from, so the number is taken as the session itself, and the summary says so.
 

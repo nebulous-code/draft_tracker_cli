@@ -163,10 +163,13 @@ fn an_answer_can_be_piped_in() {
         use draft_tracker::db::models::Status;
         use draft_tracker::db::{Db, repo};
         let handle = Db::open(db.path()).unwrap();
-        repo::insert_project(handle.conn(), "Fireside 1", None, Status::Open, None).unwrap();
+        repo::insert_project(handle.conn(), "Glasshouse", None, Status::Open, None).unwrap();
     }
 
-    let declined = run_with_stdin(&["--db", db.path(), "log", "fire", "640", "1"], Some("n\n"));
+    let declined = run_with_stdin(
+        &["--db", db.path(), "log", "glass", "640", "1"],
+        Some("n\n"),
+    );
     assert_eq!(declined.status, 0);
     assert!(
         declined.stdout.contains("Nothing saved"),
@@ -174,7 +177,10 @@ fn an_answer_can_be_piped_in() {
         declined.stdout
     );
 
-    let accepted = run_with_stdin(&["--db", db.path(), "log", "fire", "640", "1"], Some("y\n"));
+    let accepted = run_with_stdin(
+        &["--db", db.path(), "log", "glass", "640", "1"],
+        Some("y\n"),
+    );
     assert_eq!(accepted.status, 0, "{}", accepted.stderr);
     assert!(
         accepted.stdout.contains("Saved."),
@@ -184,7 +190,7 @@ fn an_answer_can_be_piped_in() {
     assert!(accepted.stdout.contains("640"), "got {:?}", accepted.stdout);
 
     // And with nothing to read, it refuses rather than guessing.
-    let silent = run(&["--db", db.path(), "log", "fire", "1200", "1"]);
+    let silent = run(&["--db", db.path(), "log", "glass", "1200", "1"]);
     assert_eq!(silent.status, 1);
     assert!(
         silent.stderr.contains("no answer to read"),
