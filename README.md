@@ -101,7 +101,7 @@ Vim-flavoured, and none of them uses a control key, so the same keymap works on 
 | `[` `]` `0` `$` | on the dashboard: older year, newer year, this year, all time |
 | `q` | quit |
 
-Colours follow [melange](https://github.com/savq/melange-nvim) and assume a terminal with true colour.
+Colours are inherited from your terminal. Every one is either an ANSI slot or the terminal's own default, so the interface takes the scheme you already use, and nothing paints over your background — a transparent terminal stays transparent. There is no theme setting and no true-colour requirement.
 
 ## Installing
 

@@ -336,24 +336,39 @@ Submit is `<leader><CR>`. The requirements originally asked for `Ctrl-Enter`, wh
 
 ## Theme
 
-Melange, mapped by role so the palette is referenced in one module rather than spread through the widgets.
+Inherited from the terminal. Every role resolves to one of the sixteen ANSI colours or to `Reset`, which emits the terminal's own default foreground or background, so the palette is whatever the writer already has configured and the application looks native in it.
 
-| Role | Colour |
+| Role | Inherited slot |
 | --- | --- |
-| background | `a.bg` #292522 |
-| popup and float background | `a.float` #34302C |
-| selected row | `a.sel` #403A36 |
-| borders, inactive text | `a.ui` #867462 |
-| labels, secondary text | `a.com` #C1A78E |
-| primary text | `a.fg` #ECE1D7 |
-| focused border, accent | `b.cyan` #89B3B6 |
-| completed, positive | `b.green` #85B695 |
-| abandoned | `c.red` #BD8183 |
-| warning, negative session | `b.yellow` #EBC06D |
-| error | `b.red` #D47766 |
-| graph series rotation | `b.blue`, `b.magenta`, `b.cyan`, `b.yellow`, then the `c` row |
+| background, popup surface | `Reset` (the terminal's own) |
+| primary text | `Reset` (the terminal's own) |
+| labels, secondary text | ANSI 7 |
+| borders, inactive text | ANSI 8 |
+| selected row | reverse video |
+| focused border, accent | bright cyan |
+| completed, positive | bright green |
+| abandoned | red |
+| warning, negative session | bright yellow |
+| error | bright red |
+| derived value | bright blue |
+| key name in help | bright yellow |
+| graph series rotation | bright blue, magenta, cyan, yellow, then the plain four |
 
-Completed bars on the current-year projects graph are green as specified, which is why green is reserved and not part of the series rotation. Abandoned bars take the muted `c.red` rather than the brighter `b.red`, so abandoning a piece reads as a neutral outcome rather than an error.
+The original specification was melange, hardcoded as RGB to match the writer's editor and prompt. It was replaced for two reasons, in order of weight.
+
+A solid background cannot be transparent. A terminal shows its own background through only where the application emits none; an explicit colour is opaque even when its value matches the terminal's exactly. Painting melange's `#292522` across the frame therefore defeated a transparent terminal, and no amount of colour-matching could have fixed it, because the problem was the presence of a background rather than its value. Only `Reset` can be seen through.
+
+The second is portability. A fixed palette assumes the background it was designed against. Melange's pale tan secondary text is legible on melange's dark surface and nearly invisible on a light one, so the hardcoded scheme was only safe because it also painted the surface it needed. Inheriting both keeps them in agreement by construction, and a writer who changes their terminal scheme gets an application that changes with it.
+
+The mapping cost almost nothing because melange was already arranged as six hues in a bright group and a muted group, which is ANSI's normal and bright intensities. What did not map is the surfaces: there is no ANSI slot that reliably reads as "slightly lifted from the background", so popups no longer have a raised colour and are separated by their border instead, and the selected row reverses rather than taking a background colour. Reversing is defined in terms of whatever the terminal's background is, so it stands out on every palette, and it makes the row opaque on a transparent terminal, which is what a selection should look like.
+
+The selected row reverses as one uniform band rather than reversing each cell's own colour. Per-cell reversal turns a coloured column into a coloured block inside the band, and on some palettes lands dark text on a dark background. The status of the selected project is still shown in the detail pane below, so nothing is lost by dropping its colour for one row.
+
+Green is reserved for completed and red for error and abandonment, which is why neither appears in the series rotation: a colour that means two things on one screen means nothing.
+
+What this gives up is a contrast guarantee. A writer whose palette is badly balanced gets a badly balanced application, and the program cannot detect that and compensate — querying the background over OSC 11 is answered by some terminals, ignored by others, and races the input loop. The honest contract is the one vim keeps: the palette belongs to the writer.
+
+Two properties are asserted by tests rather than left to inspection, because neither is visible in the text a render produces: no cell fixes a colour by value, and no cell paints a background. A future RGB constant cannot creep back in without failing them.
 
 ## How it was built
 

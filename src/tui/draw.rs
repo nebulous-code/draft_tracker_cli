@@ -61,7 +61,7 @@ fn draw_title(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let mut spans = vec![
         Span::styled(" Draft Tracker ", theme::focused()),
         Span::styled("· ", theme::inactive()),
-        Span::styled(app.screen.title(), Style::new().fg(theme::FG)),
+        Span::styled(app.screen.title(), theme::primary()),
     ];
     if app.form.include_closed {
         spans.push(Span::styled("  (all projects)", theme::label()));
@@ -120,7 +120,7 @@ fn draw_form(frame: &mut Frame<'_>, app: &App, area: Rect) {
         let style = if raw.is_empty() && !(focused && editing) {
             theme::hint()
         } else {
-            Style::new().fg(theme::FG)
+            theme::primary()
         };
         Span::styled(shown, style)
     };
@@ -387,7 +387,7 @@ fn draw_history_list(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             let word_style = if row.entry.session_word_count < 0 {
                 theme::warning()
             } else {
-                Style::new().fg(theme::FG)
+                theme::primary()
             };
             ListItem::new(Line::from(vec![
                 Span::styled(date, theme::label()),
@@ -431,7 +431,7 @@ fn draw_edit_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
         let style = if raw.is_empty() && !(focused && editing) {
             theme::hint()
         } else {
-            Style::new().fg(theme::FG)
+            theme::primary()
         };
         Span::styled(shown, style)
     };
@@ -440,7 +440,7 @@ fn draw_edit_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let project_value = if on_project {
         Span::styled(
             format!("\u{2039} {} \u{203a}", edit.project_title),
-            Style::new().fg(theme::FG),
+            theme::primary(),
         )
     } else {
         Span::styled(edit.project_title.clone(), theme::label())
@@ -575,7 +575,7 @@ fn draw_projects(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                             "{:<P_TITLE$}",
                             super::history::truncate(&row.project.title, P_TITLE)
                         ),
-                        Style::new().fg(theme::FG),
+                        theme::primary(),
                     ),
                     Span::raw("  "),
                     Span::styled(
@@ -595,7 +595,7 @@ fn draw_projects(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                     ),
                     Span::styled(
                         format!("{:>9}", thousands(m.total_word_count)),
-                        Style::new().fg(theme::FG),
+                        theme::primary(),
                     ),
                     Span::styled(format!("{:>6}", m.days_written), theme::label()),
                     Span::styled(format!("{:>8.2}", m.hours_written), theme::label()),
@@ -640,7 +640,7 @@ fn draw_project_details(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Line::from(vec![
             Span::raw(" "),
             Span::styled(format!("{label:<16}"), theme::label()),
-            Span::styled(value, Style::new().fg(theme::FG)),
+            Span::styled(value, theme::primary()),
         ])
     };
     let or_dash = |v: Option<String>| v.unwrap_or_else(|| "—".to_string());
@@ -714,7 +714,7 @@ fn draw_project_edit(frame: &mut Frame<'_>, app: &App, area: Rect) {
         let style = if raw.is_empty() && !(focused && editing) {
             theme::hint()
         } else {
-            Style::new().fg(theme::FG)
+            theme::primary()
         };
         Span::styled(shown, style)
     };
@@ -785,7 +785,7 @@ fn draw_categories(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             ListItem::new(Line::from(vec![
                 Span::styled(
                     format!("{:<22}", super::history::truncate(&row.category.name, 22)),
-                    Style::new().fg(theme::FG),
+                    theme::primary(),
                 ),
                 Span::styled(format!("{:<14}", row.type_name), theme::label()),
                 Span::styled(format!("{:>3} proj", row.project_count), theme::hint()),
@@ -824,7 +824,7 @@ fn draw_categories(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             ListItem::new(Line::from(vec![
                 Span::styled(
                     format!("{:<16}", super::history::truncate(&row.type_.name, 16)),
-                    Style::new().fg(theme::FG),
+                    theme::primary(),
                 ),
                 Span::styled(format!("{:>3} cat", row.category_count), theme::hint()),
             ]))
@@ -874,7 +874,7 @@ fn draw_category_edit(frame: &mut Frame<'_>, app: &App, area: Rect) {
         let style = if raw.is_empty() && !(focused && editing) {
             theme::hint()
         } else {
-            Style::new().fg(theme::FG)
+            theme::primary()
         };
         Span::styled(shown, style)
     };
@@ -1021,7 +1021,7 @@ fn kpi_panel<'a>(
         Line::from(vec![
             Span::raw(" "),
             Span::styled(format!("{label:<12}"), theme::label()),
-            Span::styled(value, Style::new().fg(theme::FG)),
+            Span::styled(value, theme::primary()),
         ])
     };
     let lines = vec![
@@ -1143,7 +1143,7 @@ fn draw_scope_projects(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                         "{:<GRAPH_LABEL$}",
                         super::history::truncate(&project.title, GRAPH_LABEL)
                     ),
-                    Style::new().fg(theme::FG),
+                    theme::primary(),
                 ),
                 Span::raw(" "),
                 Span::styled(
@@ -1535,9 +1535,9 @@ fn draw_leader_menu(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .map(|(key, description)| {
             Line::from(vec![
                 Span::raw("  "),
-                Span::styled(format!("{key:<key_width$}"), Style::new().fg(theme::YELLOW)),
+                Span::styled(format!("{key:<key_width$}"), theme::key()),
                 Span::raw("  "),
-                Span::styled(*description, Style::new().fg(theme::FG)),
+                Span::styled(*description, theme::primary()),
             ])
         })
         .collect();
@@ -1569,9 +1569,9 @@ fn draw_help(frame: &mut Frame<'_>, app: &App, area: Rect) {
         for (key, description) in section.bindings {
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(format!("{key:<key_width$}"), Style::new().fg(theme::YELLOW)),
+                Span::styled(format!("{key:<key_width$}"), theme::key()),
                 Span::raw("  "),
-                Span::styled(*description, Style::new().fg(theme::FG)),
+                Span::styled(*description, theme::primary()),
             ]));
         }
     }

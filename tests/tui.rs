@@ -6,6 +6,7 @@ use draft_tracker::db::{Db, repo};
 use draft_tracker::tui::app::{App, Flow, Screen, Tone};
 use draft_tracker::tui::entry::{Field, Mode, Problem};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::style::{Modifier, Style};
 
 /// A configuration for a test that does not care about backups.
 ///
@@ -3098,5 +3099,132 @@ fn backups_are_pruned_to_the_configured_count() {
             .words,
         300,
         "the newest kept backup is the newest state"
+    );
+}
+
+/// Every colour is inherited from the terminal, and no cell paints a background
+/// of its own.
+///
+/// Both properties are invisible in the text a render produces, which is why they
+/// are asserted rather than eyeballed. The first is what makes the application
+/// look native in whatever palette the writer already uses; the second is what
+/// lets a transparent terminal stay transparent, since a background is opaque
+/// even when its value matches the terminal's exactly.
+fn style_survey(app: &mut App, width: u16, height: u16) -> Vec<(u16, u16, Style)> {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| draft_tracker::tui::draw::draw(frame, app))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut out = Vec::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            let cell = &buffer[(x, y)];
+            out.push((x, y, cell.style()));
+        }
+    }
+    out
+}
+
+#[test]
+fn no_screen_specifies_a_colour_by_value() {
+    use ratatui::style::Color;
+    for (label, mut app) in [
+        ("entry", app_with_projects()),
+        ("history", app_with_history()),
+        ("stats", app_with_years()),
+    ] {
+        for screen in [
+            Screen::Entry,
+            Screen::History,
+            Screen::Projects,
+            Screen::Categories,
+            Screen::Stats,
+        ] {
+            app.screen = screen;
+            for (x, y, style) in style_survey(&mut app, 100, 34) {
+                assert!(
+                    !matches!(style.fg, Some(Color::Rgb(..)) | Some(Color::Indexed(..))),
+                    "{label}/{screen:?} cell {x},{y} fixes a foreground: {:?}",
+                    style.fg
+                );
+                assert!(
+                    !matches!(style.bg, Some(Color::Rgb(..)) | Some(Color::Indexed(..))),
+                    "{label}/{screen:?} cell {x},{y} fixes a background: {:?}",
+                    style.bg
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn nothing_paints_over_the_terminal_background() {
+    use ratatui::style::Color;
+    let mut app = app_with_projects();
+    for screen in [
+        Screen::Entry,
+        Screen::History,
+        Screen::Projects,
+        Screen::Categories,
+        Screen::Stats,
+    ] {
+        app.screen = screen;
+        for (x, y, style) in style_survey(&mut app, 100, 34) {
+            assert!(
+                matches!(style.bg, None | Some(Color::Reset)),
+                "{screen:?} cell {x},{y} has background {:?}, which would be opaque",
+                style.bg
+            );
+        }
+    }
+}
+
+/// Popups are the case most likely to want a raised surface, and a surface is a
+/// background. They are separated by their border instead.
+#[test]
+fn a_popup_does_not_paint_a_surface_either() {
+    use ratatui::style::Color;
+    let mut app = app_with_projects();
+    app.help_visible = true;
+    let survey = style_survey(&mut app, 100, 34);
+    assert!(
+        survey
+            .iter()
+            .all(|(_, _, style)| matches!(style.bg, None | Some(Color::Reset))),
+        "the help popup paints a background"
+    );
+    // And it really was drawn, so the assertion above is not vacuous.
+    app.help_visible = false;
+    let without = style_survey(&mut app, 100, 34);
+    assert_ne!(survey.len(), 0, "nothing rendered");
+    assert!(
+        survey
+            .iter()
+            .zip(without.iter())
+            .any(|((_, _, a), (_, _, b))| a != b),
+        "the popup changed nothing, so this test proves nothing"
+    );
+}
+
+/// The selected row reverses uniformly rather than reversing each cell's own
+/// colour, which would turn a coloured column into a coloured block inside the
+/// band and could land dark text on a dark background on some palettes.
+#[test]
+fn the_selected_row_reverses_as_one_band() {
+    let mut app = app_with_projects();
+    app.screen = Screen::Projects;
+    let survey = style_survey(&mut app, 100, 34);
+    let reversed: Vec<_> = survey
+        .iter()
+        .filter(|(_, _, style)| style.add_modifier.contains(Modifier::REVERSED))
+        .collect();
+    assert!(!reversed.is_empty(), "no row is shown as selected");
+    let first = reversed[0].2.fg;
+    assert!(
+        reversed.iter().all(|(_, _, style)| style.fg == first),
+        "the reversed band carries more than one foreground"
     );
 }
