@@ -173,7 +173,7 @@ An entries file needs `Date`, `Project`, `Hours` and `Category`, plus at least o
 
 A projects file carries `Project` and `Status` but no `Date`, and sets each project to `open`, `completed` or `abandoned`.
 
-The rules are deliberately forgiving about the state real spreadsheets are in. A row recording neither words nor time is skipped, which retires missed-day bookkeeping without having to recognise whatever you called it. A project's category is the majority of its rows' categories, and a category's type the majority of the rows carrying it, so one mistyped cell cannot move a project. Repeated whitespace inside a name is collapsed, because a category entered as `SitR  Book` would otherwise become a second category with nothing in it. Everything the import changed or could not account for is reported, and it refuses to run against a database that already holds data unless given `--reset`.
+The rules are deliberately forgiving about the state real spreadsheets are in. A row recording neither words nor time is skipped, which retires missed-day bookkeeping without having to recognise whatever you called it. A project's category is the majority of its rows' categories, and a category's type the majority of the rows carrying it, so one mistyped cell cannot move a project. Repeated whitespace inside a name is collapsed, because a category entered as `Short  Story` would otherwise become a second category with nothing in it. Everything the import changed or could not account for is reported, and it refuses to run against a database that already holds data unless given `--reset`.
 
 ## Where your writing log lives
 
