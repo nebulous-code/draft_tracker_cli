@@ -3100,14 +3100,10 @@ fn backups_are_pruned_to_the_configured_count() {
     );
 }
 
-/// Every colour is inherited from the terminal, and no cell paints a background
-/// of its own.
+/// Renders one state and returns every cell's style, with its position.
 ///
-/// Both properties are invisible in the text a render produces, which is why they
-/// are asserted rather than eyeballed. The first is what makes the application
-/// look native in whatever palette the writer already uses; the second is what
-/// lets a transparent terminal stay transparent, since a background is opaque
-/// even when its value matches the terminal's exactly.
+/// The colour rules are invisible in the text a render produces, so they are
+/// asserted against the buffer's styles rather than eyeballed.
 fn style_survey(app: &mut App, width: u16, height: u16) -> Vec<(u16, u16, Style)> {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -3126,57 +3122,184 @@ fn style_survey(app: &mut App, width: u16, height: u16) -> Vec<(u16, u16, Style)
     out
 }
 
-#[test]
-fn no_screen_specifies_a_colour_by_value() {
-    use ratatui::style::Color;
-    for (label, mut app) in [
-        ("entry", app_with_projects()),
+const SCREENS: [Screen; 5] = [
+    Screen::Entry,
+    Screen::History,
+    Screen::Projects,
+    Screen::Categories,
+    Screen::Stats,
+];
+
+/// Hands `check` every state the drawing code has a branch for, each with a label
+/// naming it.
+///
+/// Enumerated rather than left at "the five screens". Nine of the eleven
+/// `theme::float()` call sites are in the overlays and the edit panels, and a
+/// survey of the base screens alone stayed green with a hardcoded opaque
+/// background sitting in the project edit panel. A colour rule that only holds
+/// where it is checked is not a rule.
+fn for_each_drawable_state(mut check: impl FnMut(&str, &mut App)) {
+    // The five screens, over three fixtures, so the lists and graphs have
+    // something in them rather than rendering their empty state.
+    for (fixture, mut app) in [
+        ("projects", app_with_projects()),
         ("history", app_with_history()),
-        ("stats", app_with_years()),
+        ("years", app_with_years()),
     ] {
-        for screen in [
-            Screen::Entry,
-            Screen::History,
-            Screen::Projects,
-            Screen::Categories,
-            Screen::Stats,
-        ] {
+        for screen in SCREENS {
             app.screen = screen;
-            for (x, y, style) in style_survey(&mut app, 100, 34) {
-                assert!(
-                    !matches!(style.fg, Some(Color::Rgb(..)) | Some(Color::Indexed(..))),
-                    "{label}/{screen:?} cell {x},{y} fixes a foreground: {:?}",
-                    style.fg
-                );
-                assert!(
-                    !matches!(style.bg, Some(Color::Rgb(..)) | Some(Color::Indexed(..))),
-                    "{label}/{screen:?} cell {x},{y} fixes a background: {:?}",
-                    style.bg
-                );
-            }
+            check(&format!("{fixture}/{screen:?}"), &mut app);
         }
     }
+
+    // The empty database, whose screens take their "nothing here yet" branches.
+    let mut app = App::new(Db::open_in_memory().unwrap(), test_config()).unwrap();
+    for screen in SCREENS {
+        app.screen = screen;
+        check(&format!("empty/{screen:?}"), &mut app);
+    }
+
+    // The two overlays, over the busiest screen they can cover.
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    app.help_visible = true;
+    check("help popup", &mut app);
+    app.help_visible = false;
+    app.leader_pending = true;
+    app.leader_hint = true;
+    check("leader menu", &mut app);
+
+    // Each edit panel, opened with the key a writer opens it with, so a panel
+    // that stops opening fails here rather than silently going unchecked.
+    let mut app = app_with_history();
+    to_history(&mut app);
+    app.on_key(ch('i')).unwrap();
+    assert!(
+        app.history.edit.is_some(),
+        "the history edit panel did not open"
+    );
+    check("history edit", &mut app);
+
+    // The same panel with the project in hand, which puts the move-to picker
+    // beside it, and then filtered to nothing, which is the picker's other branch.
+    focus_edit_field(&mut app, EditField::Project);
+    check("history edit, move-to picker", &mut app);
+    app.on_key(ch('i')).unwrap();
+    type_str(&mut app, "zzzz");
+    assert!(
+        app.history.edit_choices().is_empty(),
+        "the filter was meant to match nothing"
+    );
+    check("history edit, picker matching nothing", &mut app);
+
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    app.on_key(ch('i')).unwrap();
+    assert!(
+        app.projects.edit.is_some(),
+        "the project edit panel did not open"
+    );
+    check("project edit", &mut app);
+
+    let mut app = app_with_history();
+    to_screen(&mut app, 'p', Screen::Projects);
+    app.on_key(ch('o')).unwrap();
+    assert!(
+        app.projects.edit.as_ref().is_some_and(|e| e.is_creating()),
+        "the new-project panel did not open"
+    );
+    check("new project", &mut app);
+
+    let mut app = app_with_history();
+    to_screen(&mut app, 'c', Screen::Categories);
+    app.on_key(ch('i')).unwrap();
+    assert!(
+        app.categories.edit.is_some(),
+        "the category edit panel did not open"
+    );
+    check("category edit", &mut app);
+
+    let mut app = app_with_history();
+    to_screen(&mut app, 'c', Screen::Categories);
+    app.on_key(ch('o')).unwrap();
+    assert!(
+        app.categories.edit.is_some(),
+        "the new-category panel did not open"
+    );
+    check("new category", &mut app);
+
+    // The status line's own branches: a delete confirmation and a flash of each
+    // tone, since each tone picks a different role.
+    let mut app = app_with_history();
+    to_history(&mut app);
+    app.history.confirming_delete = true;
+    check("delete confirmation", &mut app);
+    app.history.confirming_delete = false;
+    for tone in [Tone::Info, Tone::Success, Tone::Warning, Tone::Error] {
+        app.flash = Some(draft_tracker::tui::app::Flash {
+            text: "something happened".into(),
+            tone,
+        });
+        check(&format!("flash/{tone:?}"), &mut app);
+    }
+    app.flash = None;
+}
+
+#[test]
+fn no_state_specifies_a_colour_by_value() {
+    use ratatui::style::Color;
+    for_each_drawable_state(|label, app| {
+        for (x, y, style) in style_survey(app, 100, 34) {
+            assert!(
+                !matches!(style.fg, Some(Color::Rgb(..)) | Some(Color::Indexed(..))),
+                "{label} cell {x},{y} fixes a foreground: {:?}",
+                style.fg
+            );
+            assert!(
+                !matches!(style.bg, Some(Color::Rgb(..)) | Some(Color::Indexed(..))),
+                "{label} cell {x},{y} fixes a background: {:?}",
+                style.bg
+            );
+        }
+    });
 }
 
 #[test]
 fn nothing_paints_over_the_terminal_background() {
     use ratatui::style::Color;
-    let mut app = app_with_projects();
-    for screen in [
-        Screen::Entry,
-        Screen::History,
-        Screen::Projects,
-        Screen::Categories,
-        Screen::Stats,
-    ] {
-        app.screen = screen;
-        for (x, y, style) in style_survey(&mut app, 100, 34) {
+    for_each_drawable_state(|label, app| {
+        for (x, y, style) in style_survey(app, 100, 34) {
             assert!(
                 matches!(style.bg, None | Some(Color::Reset)),
-                "{screen:?} cell {x},{y} has background {:?}, which would be opaque",
+                "{label} cell {x},{y} has background {:?}, which would be opaque",
                 style.bg
             );
         }
+    });
+}
+
+/// The notice shown when the terminal is too small is drawn instead of the
+/// interface, so it needs a survey at a size that triggers it.
+#[test]
+fn the_too_small_notice_inherits_its_colours_too() {
+    use ratatui::style::Color;
+    let mut app = app_with_projects();
+    let survey = style_survey(&mut app, 40, 10);
+    assert!(
+        !survey.is_empty() && survey.len() == 400,
+        "the notice did not render at 40x10"
+    );
+    for (x, y, style) in survey {
+        assert!(
+            matches!(style.bg, None | Some(Color::Reset)),
+            "the too-small notice paints cell {x},{y}: {:?}",
+            style.bg
+        );
+        assert!(
+            !matches!(style.fg, Some(Color::Rgb(..)) | Some(Color::Indexed(..))),
+            "the too-small notice fixes a foreground at {x},{y}: {:?}",
+            style.fg
+        );
     }
 }
 

@@ -329,24 +329,39 @@ fn a_status_is_parsed_after_trimming_and_without_regard_to_case() {
 
 // ------------------------------------------------------------ dashboard
 
-/// Two years of entries across two projects, one completed in the later year.
+/// Two years of entries across three projects: one completed in the later year,
+/// one still open, and one abandoned with no category, so the uncategorised
+/// bucket has something in it.
+///
+/// No word does two jobs here. A fixture where a project and a category share a
+/// name reads ambiguously at every assertion, and would let one pass for the
+/// wrong reason.
 fn dashboard_fixture() -> Db {
     let db = Db::open_in_memory().unwrap();
     let conn = db.conn();
     let fiction = repo::ensure_type(conn, "Fiction").unwrap();
     let nonfic = repo::ensure_type(conn, "Non-Fiction").unwrap();
-    let novel = repo::ensure_category(conn, "Short Story", fiction).unwrap();
-    let essays = repo::ensure_category(conn, "Essay", nonfic).unwrap();
+    let short_story = repo::ensure_category(conn, "Short Story", fiction).unwrap();
+    let essay = repo::ensure_category(conn, "Essay", nonfic).unwrap();
 
-    let a = repo::insert_project(conn, "Novel", Some(novel), Status::Completed, None).unwrap();
-    let b = repo::insert_project(conn, "Essay", Some(essays), Status::Open, None).unwrap();
-    let c = repo::insert_project(conn, "Dropped", None, Status::Abandoned, None).unwrap();
+    let completed = repo::insert_project(
+        conn,
+        "Winter Harbour",
+        Some(short_story),
+        Status::Completed,
+        None,
+    )
+    .unwrap();
+    let open =
+        repo::insert_project(conn, "Against Outlines", Some(essay), Status::Open, None).unwrap();
+    let abandoned =
+        repo::insert_project(conn, "Nine Doors", None, Status::Abandoned, None).unwrap();
 
     repo::insert_entry(
         conn,
         &NewEntry {
             entry_date: day(2025, 5, 1),
-            project_id: a,
+            project_id: completed,
             session_word_count: 1_000,
             hours: 2.0,
             notes: None,
@@ -357,7 +372,7 @@ fn dashboard_fixture() -> Db {
         conn,
         &NewEntry {
             entry_date: day(2026, 2, 1),
-            project_id: a,
+            project_id: completed,
             session_word_count: 3_000,
             hours: 2.0,
             notes: None,
@@ -368,7 +383,7 @@ fn dashboard_fixture() -> Db {
         conn,
         &NewEntry {
             entry_date: day(2026, 3, 1),
-            project_id: b,
+            project_id: open,
             session_word_count: 500,
             hours: 1.0,
             notes: None,
@@ -379,7 +394,7 @@ fn dashboard_fixture() -> Db {
         conn,
         &NewEntry {
             entry_date: day(2026, 3, 2),
-            project_id: c,
+            project_id: abandoned,
             session_word_count: 250,
             hours: 1.0,
             notes: None,
@@ -415,7 +430,7 @@ fn abandoned_work_is_never_counted_as_completed() {
         stats::completed_project_count(db.conn(), Some(2026)).unwrap(),
         1
     );
-    // The novel's last entry is 2026, so it does not count toward 2025.
+    // Winter Harbour's last entry is 2026, so it does not count toward 2025.
     assert_eq!(
         stats::completed_project_count(db.conn(), Some(2025)).unwrap(),
         0
@@ -427,7 +442,10 @@ fn the_projects_graph_carries_the_status_each_bar_is_coloured_by() {
     let db = dashboard_fixture();
     let bars = stats::project_words(db.conn(), Some(2026)).unwrap();
     let titles: Vec<_> = bars.iter().map(|b| b.title.as_str()).collect();
-    assert_eq!(titles, vec!["Novel", "Essay", "Dropped"]);
+    assert_eq!(
+        titles,
+        vec!["Winter Harbour", "Against Outlines", "Nine Doors"]
+    );
     assert_eq!(bars[0].status, Status::Completed);
     assert_eq!(bars[1].status, Status::Open);
     assert_eq!(bars[2].status, Status::Abandoned);
@@ -642,11 +660,11 @@ fn usage_counts_come_back_with_categories_and_types() {
         .unwrap();
     assert_eq!(story_row.project_count, 2);
     assert_eq!(story_row.type_name, "Fiction");
-    let kids = cats
+    let flash_row = cats
         .iter()
         .find(|c| c.category.name == "Flash Fiction")
         .unwrap();
-    assert_eq!(kids.project_count, 0);
+    assert_eq!(flash_row.project_count, 0);
 
     let types = repo::list_types_with_usage(conn).unwrap();
     assert_eq!(

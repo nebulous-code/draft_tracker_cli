@@ -2,7 +2,6 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
-use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
 
@@ -1304,8 +1303,6 @@ fn draw_category_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         leftover -= 1;
     }
 
-    let colour = |index: usize| Style::new().fg(theme::SERIES[index % theme::SERIES.len()]);
-
     let mut lines: Vec<Line<'_>> = Vec::new();
     for row in legend_rows(&shares, width) {
         let mut spans = vec![Span::raw(" ")];
@@ -1314,7 +1311,7 @@ fn draw_category_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 spans.push(Span::raw("  "));
             }
             let (name, share, words) = &shares[*index];
-            spans.push(Span::styled(EIGHTHS[7].to_string(), colour(*index)));
+            spans.push(Span::styled(EIGHTHS[7].to_string(), theme::series(*index)));
             spans.push(Span::styled(
                 legend_text(name, *share, *words),
                 theme::label(),
@@ -1327,7 +1324,12 @@ fn draw_category_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .iter()
         .enumerate()
         .filter(|(index, _)| cells[*index] > 0)
-        .map(|(index, _)| Span::styled(EIGHTHS[7].to_string().repeat(cells[index]), colour(index)))
+        .map(|(index, _)| {
+            Span::styled(
+                EIGHTHS[7].to_string().repeat(cells[index]),
+                theme::series(index),
+            )
+        })
         .collect();
     for _ in 0..CATEGORY_BAR_ROWS {
         lines.push(Line::from(bar_spans.clone()));

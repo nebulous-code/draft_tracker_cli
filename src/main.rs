@@ -355,7 +355,7 @@ fn log(config: &Config, args: &Args) -> Result<ExitCode> {
     let [project, words, hours] = args.positional.as_slice() else {
         bail!(
             "log needs a project, a word count and hours, for example:\n  \
-             draft-tracker log glasshouse 15682 1\nTry --help for the details."
+             draft-tracker log salt 15982 1\nTry --help for the details."
         );
     };
     let request = cli::Request {

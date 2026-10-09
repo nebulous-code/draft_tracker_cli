@@ -368,7 +368,9 @@ Green is reserved for completed and red for error and abandonment, which is why 
 
 What this gives up is a contrast guarantee. A writer whose palette is badly balanced gets a badly balanced application, and the program cannot detect that and compensate — querying the background over OSC 11 is answered by some terminals, ignored by others, and races the input loop. The honest contract is the one vim keeps: the palette belongs to the writer.
 
-Two properties are asserted by tests rather than left to inspection, because neither is visible in the text a render produces: no cell fixes a colour by value, and no cell paints a background. A future RGB constant cannot creep back in without failing them.
+Two properties are asserted by tests rather than left to inspection, because neither is visible in the text a render produces: no cell fixes a colour by value, and no cell paints a background. Both are checked by rendering into a buffer and walking every cell's style.
+
+The reach of that check is the thing to maintain. It was written against the five screens, which left the overlays and the edit panels unexamined even though they hold nine of the eleven uses of the popup style; a hardcoded opaque background placed in the project edit panel passed the whole suite. The surveys now enumerate every state the drawing code branches on — the five screens over three fixtures and an empty database, both overlays, each edit panel, the move-to picker both listing and empty, the delete confirmation, and a flash of each tone — and each state is opened the way a writer opens it, so a panel that stops opening fails the test rather than quietly dropping out of the survey. A new drawn state belongs in that enumeration, because the guarantee is only as wide as the enumeration is.
 
 ## How it was built
 
