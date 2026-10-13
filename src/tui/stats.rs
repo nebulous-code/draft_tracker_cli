@@ -9,6 +9,7 @@ use chrono::{Datelike, Local};
 
 use crate::db::stats::{CategoryWords, ProjectWords, Totals};
 use crate::db::{Db, DbError, stats};
+use crate::streaks;
 
 /// What the lower half of the dashboard describes.
 ///
@@ -50,6 +51,14 @@ pub struct Stats {
     pub selected_projects: Vec<ProjectWords>,
     pub by_year: Vec<(i32, i64)>,
     pub selected_categories: Vec<CategoryWords>,
+    /// Consecutive days written as of today, across the whole journal.
+    ///
+    /// Deliberately not scoped. A streak is where the writer stands now, not a
+    /// property of a period, so stepping back to an earlier year leaves it
+    /// alone.
+    pub current_streak: u32,
+    pub lifetime_streak: u32,
+    pub selected_streak: u32,
     /// First project shown in the graph, so a long list can be walked through.
     project_offset: usize,
 }
@@ -72,6 +81,9 @@ impl Stats {
             selected_projects: Vec::new(),
             by_year: Vec::new(),
             selected_categories: Vec::new(),
+            current_streak: 0,
+            lifetime_streak: 0,
+            selected_streak: 0,
             project_offset: 0,
         };
         stats.reload(db)?;
@@ -99,6 +111,14 @@ impl Stats {
         self.lifetime = stats::totals(conn, None)?;
         self.lifetime_completed = stats::completed_project_count(conn, None)?;
         self.by_year = stats::words_by_year(conn)?;
+
+        // One pass over every day written serves both figures: the current run
+        // has to see across the year boundary it may be sitting on, and the
+        // lifetime record is the longest run in the same set.
+        let every_day = stats::entry_dates(conn, None)?;
+        self.current_streak = streaks::current(&every_day, Local::now().date_naive());
+        self.lifetime_streak = streaks::longest(&every_day);
+
         self.reload_scope(db)
     }
 
@@ -110,6 +130,7 @@ impl Stats {
         self.selected_completed = stats::completed_project_count(conn, year)?;
         self.selected_projects = stats::project_words(conn, year)?;
         self.selected_categories = stats::category_words(conn, year)?;
+        self.selected_streak = streaks::longest(&stats::entry_dates(conn, year)?);
         self.project_offset = 0;
         Ok(())
     }

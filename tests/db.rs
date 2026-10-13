@@ -4,6 +4,7 @@ use chrono::NaiveDate;
 use draft_tracker::MIN_SESSION_HOURS;
 use draft_tracker::db::models::{NewEntry, Status};
 use draft_tracker::db::{Db, DbError, migrations, repo, stats};
+use draft_tracker::streaks;
 use rusqlite::params;
 
 fn day(y: i32, m: u32, d: u32) -> NaiveDate {
@@ -476,6 +477,61 @@ fn an_uncategorised_project_is_bucketed_rather_than_dropped() {
             .any(|c| c.category == "Uncategorized" && c.words == 250),
         "got {dist:?}"
     );
+}
+
+/// The streak arithmetic is tested on its own in `streaks.rs`. What matters here
+/// is that the query hands it the right set: one row per day, in order, and
+/// clipped to the year when one is given, since that clipping is the only reason
+/// a year's longest streak differs from the lifetime one.
+#[test]
+fn entry_dates_come_back_distinct_and_in_order() {
+    let db = dashboard_fixture();
+    let conn = db.conn();
+    // A second session on a day already logged, which must not appear twice.
+    add(&db, 1, day(2026, 3, 1), 100, 1.0);
+
+    assert_eq!(
+        stats::entry_dates(conn, None).unwrap(),
+        vec![
+            day(2025, 5, 1),
+            day(2026, 2, 1),
+            day(2026, 3, 1),
+            day(2026, 3, 2)
+        ]
+    );
+    assert_eq!(
+        stats::entry_dates(conn, Some(2025)).unwrap(),
+        vec![day(2025, 5, 1)]
+    );
+    assert_eq!(
+        stats::entry_dates(conn, Some(2026)).unwrap(),
+        vec![day(2026, 2, 1), day(2026, 3, 1), day(2026, 3, 2)]
+    );
+    assert!(stats::entry_dates(conn, Some(2024)).unwrap().is_empty());
+}
+
+/// Clipping, end to end: the same run of days gives the two years their halves
+/// and all time the whole, which is the rule the feature was asked for.
+#[test]
+fn a_new_year_run_is_clipped_by_the_year_filter_but_not_by_lifetime() {
+    let db = Db::open_in_memory().unwrap();
+    let conn = db.conn();
+    let project = repo::insert_project(conn, "The Tin Road", None, Status::Open, None).unwrap();
+    for i in 0..10i64 {
+        // 28 December 2025 to 6 January 2026.
+        add(
+            &db,
+            project,
+            day(2025, 12, 28) + chrono::Duration::days(i),
+            100,
+            1.0,
+        );
+    }
+
+    let longest = |year| streaks::longest(&stats::entry_dates(conn, year).unwrap());
+    assert_eq!(longest(None), 10);
+    assert_eq!(longest(Some(2025)), 4);
+    assert_eq!(longest(Some(2026)), 6);
 }
 
 // ------------------------------------------------------------ housekeeping

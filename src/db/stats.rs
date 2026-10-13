@@ -4,6 +4,7 @@
 //! a single query serves both sections of the stats screen and the year is never
 //! hardcoded. That is what lets the screen step back through previous years.
 
+use chrono::NaiveDate;
 use rusqlite::{Connection, params};
 
 use super::DbError;
@@ -132,6 +133,24 @@ pub fn category_words(conn: &Connection, year: Option<i32>) -> Result<Vec<Catego
             words: r.get(1)?,
         })
     })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// Every distinct day that has an entry, oldest first, for a year or all time.
+///
+/// Distinct because a streak counts days at the desk, not entries: two sessions
+/// on one morning are one day written. The year filter is what clips a streak at
+/// the year boundary, since a run can only be as long as the set of days handed
+/// to [`crate::streaks`] allows.
+pub fn entry_dates(conn: &Connection, year: Option<i32>) -> Result<Vec<NaiveDate>, DbError> {
+    let y = year_param(year);
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT entry_date
+           FROM entries
+          WHERE ?1 IS NULL OR strftime('%Y', entry_date) = ?1
+          ORDER BY entry_date",
+    )?;
+    let rows = stmt.query_map(params![y], |r| r.get(0))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 

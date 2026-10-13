@@ -1822,6 +1822,35 @@ fn app_with_years() -> App {
     App::new(db, test_config()).unwrap()
 }
 
+/// A journal whose days run up to yesterday, so the current streak is alive.
+///
+/// Seeded from the clock rather than from fixed dates, because a current streak
+/// is a claim about today and a fixture frozen in 2026 would stop exercising it
+/// the moment the year turned. `days` days ending yesterday, which is the state
+/// the writer is in most mornings: the run stands, today is not written yet.
+fn app_with_a_streak_ending_yesterday(days: i64) -> App {
+    let db = Db::open_in_memory().unwrap();
+    {
+        let conn = db.conn();
+        let project = repo::insert_project(conn, "Salt Lantern", None, Status::Open, None).unwrap();
+        let yesterday = chrono::Local::now().date_naive().pred_opt().unwrap();
+        for i in 0..days {
+            repo::insert_entry(
+                conn,
+                &NewEntry {
+                    entry_date: yesterday - chrono::Duration::days(i),
+                    project_id: project,
+                    session_word_count: 500,
+                    hours: 1.0,
+                    notes: None,
+                },
+            )
+            .unwrap();
+        }
+    }
+    App::new(db, test_config()).unwrap()
+}
+
 fn to_stats(app: &mut App) {
     app.on_key(ch(' ')).unwrap();
     app.on_key(ch('s')).unwrap();
@@ -3348,4 +3377,192 @@ fn the_selected_row_reverses_as_one_band() {
         reversed.iter().all(|(_, _, style)| style.fg == first),
         "the reversed band carries more than one foreground"
     );
+}
+
+// ------------------------------------------------------------ streaks on screen
+
+#[test]
+fn the_current_streak_is_named_above_the_panels() {
+    let mut app = app_with_a_streak_ending_yesterday(7);
+    to_stats(&mut app);
+    let screen = render(&mut app, 100, 30);
+    let text = screen.join("\n");
+
+    assert!(text.contains("Current streak: 7 days"), "got:\n{text}");
+    // Above the panels, not inside one: the line must come before the box that
+    // the periods are drawn in, since that is where it was asked to sit.
+    let streak_row = screen
+        .iter()
+        .position(|l| l.contains("Current streak"))
+        .expect("the streak line");
+    let lifetime_row = screen
+        .iter()
+        .position(|l| l.contains("Lifetime"))
+        .expect("the lifetime panel");
+    assert!(
+        streak_row < lifetime_row,
+        "streak on row {streak_row}, lifetime panel on row {lifetime_row}:\n{text}"
+    );
+}
+
+/// Today's absence does not break the run, and logging today extends it. Checked
+/// through the screen rather than the arithmetic so the figure a writer actually
+/// reads is the one being asserted.
+#[test]
+fn logging_today_moves_the_current_streak_on_by_one() {
+    let mut app = app_with_a_streak_ending_yesterday(7);
+    to_stats(&mut app);
+    assert!(
+        render(&mut app, 100, 30)
+            .join("\n")
+            .contains("Current streak: 7 days")
+    );
+
+    let project = app.stats.selected_projects[0].project_id;
+    repo::insert_entry(
+        app.db.conn(),
+        &NewEntry {
+            entry_date: chrono::Local::now().date_naive(),
+            project_id: project,
+            session_word_count: 500,
+            hours: 1.0,
+            notes: None,
+        },
+    )
+    .unwrap();
+    app.stats.reload(&app.db).unwrap();
+
+    let text = render(&mut app, 100, 30).join("\n");
+    assert!(text.contains("Current streak: 8 days"), "got:\n{text}");
+}
+
+#[test]
+fn a_streak_of_one_day_is_not_reported_as_one_days() {
+    let mut app = app_with_a_streak_ending_yesterday(1);
+    to_stats(&mut app);
+    let text = render(&mut app, 100, 30).join("\n");
+    assert!(text.contains("Current streak: 1 day"), "got:\n{text}");
+    assert!(!text.contains("1 days"), "got:\n{text}");
+}
+
+/// A journal whose last entry is older than yesterday has no live run, and the
+/// screen says so plainly rather than hiding the line.
+#[test]
+fn a_broken_streak_reads_as_zero_rather_than_vanishing() {
+    let mut app = app_with_years();
+    to_stats(&mut app);
+    let text = render(&mut app, 100, 30).join("\n");
+    assert!(text.contains("Current streak: 0 days"), "got:\n{text}");
+}
+
+/// The current streak is where the writer stands, not a property of the period on
+/// screen, so walking the year selector must leave it alone. Without this, the
+/// obvious implementation — one query per scope — would quietly make it the
+/// selected year's streak.
+#[test]
+fn the_current_streak_does_not_move_with_the_year_selector() {
+    let mut app = app_with_a_streak_ending_yesterday(7);
+    to_stats(&mut app);
+    let here = app.stats.current_streak;
+    assert_eq!(here, 7);
+
+    app.on_key(ch('$')).unwrap();
+    assert!(app.stats.is_lifetime());
+    assert_eq!(app.stats.current_streak, here);
+    assert!(
+        render(&mut app, 100, 30)
+            .join("\n")
+            .contains("Current streak: 7 days")
+    );
+
+    app.on_key(ch('k')).unwrap();
+    assert_eq!(app.stats.current_streak, here, "and on a year view");
+}
+
+#[test]
+fn each_period_carries_its_own_best_streak() {
+    let mut app = app_with_a_streak_ending_yesterday(7);
+    to_stats(&mut app);
+    let text = render(&mut app, 100, 30).join("\n");
+    assert_eq!(
+        text.matches("Best Streak").count(),
+        2,
+        "one row in each panel:\n{text}"
+    );
+}
+
+/// The rule that was asked for, read off the screen: a run across new year gives
+/// each year its own half while all time keeps the whole thing.
+#[test]
+fn a_best_streak_is_clipped_at_the_year_boundary_but_not_in_lifetime() {
+    let db = Db::open_in_memory().unwrap();
+    {
+        let conn = db.conn();
+        let project = repo::insert_project(conn, "The Tin Road", None, Status::Open, None).unwrap();
+        // 1 November 2025 to 29 January 2026: 61 days in 2025, 29 in 2026, 90 all told.
+        for i in 0..90i64 {
+            repo::insert_entry(
+                conn,
+                &NewEntry {
+                    entry_date: day(2025, 11, 1) + chrono::Duration::days(i),
+                    project_id: project,
+                    session_word_count: 500,
+                    hours: 1.0,
+                    notes: None,
+                },
+            )
+            .unwrap();
+        }
+    }
+    let mut app = App::new(db, test_config()).unwrap();
+    to_stats(&mut app);
+
+    app.stats.go_to_lifetime(&app.db).unwrap();
+    assert_eq!(app.stats.lifetime_streak, 90);
+    let all_time = render(&mut app, 100, 30).join("\n");
+    assert!(all_time.contains("Best Streak 90 days"), "got:\n{all_time}");
+
+    // One padding space: the label is eleven characters in a twelve-wide
+    // column, so the value still lands where every other value does.
+    for (year, expected) in [(2025, "61 days"), (2026, "29 days")] {
+        app.stats.scope = draft_tracker::tui::stats::Scope::Year(year);
+        app.stats.reload(&app.db).unwrap();
+        let text = render(&mut app, 100, 30).join("\n");
+        assert!(
+            text.contains(&format!("Best Streak {expected}")),
+            "{year} should show {expected}, got:\n{text}"
+        );
+        assert!(
+            text.contains("Best Streak 90 days"),
+            "{year}'s view still shows the lifetime 90 beside it, got:\n{text}"
+        );
+    }
+}
+
+/// The streak is the last row of the KPI box, so it is the row a squeezed layout
+/// drops first. Adding it put the screen one row over budget at 80x24 and that is
+/// exactly what happened: the box rendered its first four figures and silently
+/// left the new one off. Pinned at every size down to the stated minimum, because
+/// a figure that is only there on a tall terminal has not really been added.
+#[test]
+fn the_kpi_box_keeps_its_streak_row_at_every_supported_size() {
+    for (width, height) in [(56, 16), (80, 24), (90, 26), (100, 30), (120, 40)] {
+        let mut app = app_with_a_streak_ending_yesterday(7);
+        to_stats(&mut app);
+        let text = render(&mut app, width, height).join("\n");
+        assert!(
+            text.contains("Best Streak"),
+            "{width}x{height} dropped the streak row:\n{text}"
+        );
+        assert!(
+            text.contains("Current streak: 7 days"),
+            "{width}x{height} dropped the headline:\n{text}"
+        );
+        // The row above it too: a box that kept the streak by losing the rate
+        // would pass the assertions above and still be wrong.
+        assert!(
+            text.contains("Words/Hour"),
+            "{width}x{height} dropped a row above the streak:\n{text}"
+        );
+    }
 }

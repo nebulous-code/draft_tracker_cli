@@ -98,8 +98,26 @@ Dashboard queries all take an optional year and resolve lifetime when it is abse
 | Projects graph | per project with an entry in the year, its summed words; title truncated to 10 characters; bar green when completed, muted red when abandoned, default when open |
 | Year over Year | words grouped by `strftime('%Y', entry_date)` |
 | Category distribution | per category, its year words over the year total, drawn as one segmented bar |
+| Best Streak | the longest run of consecutive `entry_date` values within the scope |
+| Current Streak | the run of consecutive days reaching today, or yesterday when today is unwritten |
 
 Words per hour is allowed to go negative, since a revision day that cuts words is a real working day. It is undefined rather than negative when hours is 0, which the two historical rows below require; those render as an em dash.
+
+### Streaks
+
+The two streak figures are the one part of the dashboard that is not a SQL aggregate. `streaks::longest` and `streaks::current` take the set of days that have an entry and loop over it, because the interesting part is not the aggregation but what counts as a break in a run, and that reads better as a loop than as a window function. Being pure, they are also tested against hand-written calendars rather than against a database.
+
+Any entry counts as a day written, revision days included. A session that cut words still kept the appointment, and a streak is a record of showing up rather than of output, so making it a production measure would have it break on exactly the days that are hardest to show up for.
+
+Today being unwritten does not break the current streak, because the day is not over. A run therefore counts as current if it reaches either today or yesterday, and logging today extends it rather than restarting it. Only a whole day gone by unwritten resets it. Written Monday to Sunday and read on Monday it is seven; log that Monday and it is eight; read on Tuesday with Monday still empty it is zero. The alternative, requiring today, would show a zero every morning before work started, which is the opposite of what the figure is for.
+
+Days after today are ignored by the current streak. Entry dates are not validated against the calendar, so a journal can hold one, and a date that has not arrived cannot extend a streak that has not been lived. Such a day is still counted in its own year's best streak, where it is a fact about that year's data rather than a claim about now.
+
+Neither function knows about years. A year's best streak is the longest run among that year's days alone, which the caller gets by passing only those days — the same optional-year query that serves every other KPI. That is what clips a run at the year boundary: 31 December and 1 January are consecutive on the calendar but cannot both be in one year's set. A ninety-day run from November to January therefore contributes its two halves to the two years and its whole length to the lifetime figure, which is the behaviour asked for: the year figures describe what was achieved inside a year, while the lifetime one describes the run itself.
+
+The current streak is deliberately not scoped. It sits above both panels, centered, because it is the only figure on the screen that does not describe a period: it answers "am I still going", which is the question the screen gets opened for. Stepping the year selector leaves it alone. A zero is drawn in the label's colour rather than emphasised, since giving the screen's loudest position to a broken run would be the wrong use of it.
+
+Adding the row cost the dashboard two rows, which put it one over budget at 80x24 and exposed a layout assumption worth recording. Ratatui shrinks fixed-length constraints in proportion when they do not all fit, and the row it took was the bottom of the KPI box — the new streak, rendering the feature invisible at the most common terminal size while every test still passed. The panels now have an explicit order of priority: the headline figures keep their rows, and the projects graph gives some up, because it is the only panel that scrolls and its title already reads "1-4 of 7". A year quietly missing from the year-over-year graph would instead look like a year that was never written. The guard is a test that renders at every supported size from 56x16 up and asserts the row is present, since a figure that only appears on a tall terminal has not really been added.
 
 ## Import
 

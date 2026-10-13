@@ -10,6 +10,7 @@ pub mod config;
 pub mod db;
 pub mod demo;
 pub mod import;
+pub mod streaks;
 pub mod tui;
 
 /// The shortest session the application will record, in hours.

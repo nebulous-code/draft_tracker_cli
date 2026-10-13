@@ -50,15 +50,17 @@ It will import years of existing spreadsheets, which is the only sensible way to
  NORMAL  Project WC  ·  <leader><CR> submit  ·  ? help  ·  q quit
 ```
 
-The dashboard answers the questions a spreadsheet makes hard. `j` and `k` walk back through the years, `$` shows all time.
+The dashboard answers the questions a spreadsheet makes hard. `j` and `k` walk back through the years, `$` shows all time. The current streak sits above everything, counting consecutive days written: today being empty does not break it, since the day is not over, so the number only falls to zero once a whole day has gone by unwritten. Each period carries its own best streak, and a run that crosses new year gives each year its own half while the lifetime figure keeps the whole length.
 
 ```
  Draft Tracker · Stats
+                                  Current streak: 0 days
 ┌ Lifetime ─────────────────────────────────┐┌ 2025 ─────────────────────────────────────┐
 │ Words       171,725                       ││ Words       25,858                        │
 │ Hours       188.00                        ││ Hours       27.50                         │
 │ Completed   14                            ││ Completed   6                             │
 │ Words/Hour  913                           ││ Words/Hour  940                           │
+│ Best Streak 4 days                        ││ Best Streak 2 days                        │
 └───────────────────────────────────────────┘└───────────────────────────────────────────┘
 ┌ 2025 projects (1–4 of 7) ──────────────────────────────────────────────────────────────┐
 │ Glasshouse █████████████████████████████████████████████████████████████████     7,647 │

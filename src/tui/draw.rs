@@ -992,29 +992,98 @@ pub fn bar(value: i64, max: i64, width: usize) -> String {
     out
 }
 
+/// The streak headline; and the five KPI rows with their borders.
+const STREAK_ROW: u16 = 1;
+const KPI_HEIGHT: u16 = 7;
+/// A bordered graph with one bar left in it.
+const PROJECTS_MIN: u16 = 3;
+
 fn draw_stats(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
-    let yoy_height = (app.stats.by_year.len() as u16 + 2).clamp(3, 9);
-    let category_height = category_panel_height(&app.stats, area.width);
+    // Constraints that do not all fit are shrunk in proportion, which takes rows
+    // off the bottom of the KPI box, and the bottom row is the streak. So the
+    // panels are given an explicit order of priority rather than left to be
+    // squeezed evenly: the summary figures are what the screen is for, and they
+    // keep their rows while the graphs give some up.
+    //
+    // The projects graph absorbs the shortfall because it is the only panel that
+    // scrolls. Its title already reads "1-2 of 18", so a reader can see there is
+    // more and reach it with h and l, where a year quietly missing from the year
+    // graph would look like a year that was never written.
+    let spare = area
+        .height
+        .saturating_sub(STREAK_ROW + KPI_HEIGHT + PROJECTS_MIN);
+    let category_height = category_panel_height(&app.stats, area.width).min(spare);
+    let yoy_wanted = (app.stats.by_year.len() as u16 + 2).clamp(3, 9);
+    let yoy_height = yoy_wanted.min(spare - category_height);
+
     // The category bar sits above the year graph: it describes the selected
     // scope, like everything above it, where the year graph spans all of them.
-    let [kpi_area, projects_area, category_area, yoy_area] = Layout::vertical([
-        Constraint::Length(6),
-        Constraint::Min(4),
+    // The streak sits above the panels because it belongs to none of them.
+    let [
+        streak_area,
+        kpi_area,
+        projects_area,
+        category_area,
+        yoy_area,
+    ] = Layout::vertical([
+        Constraint::Length(STREAK_ROW),
+        Constraint::Length(KPI_HEIGHT),
+        Constraint::Min(PROJECTS_MIN),
         Constraint::Length(category_height),
         Constraint::Length(yoy_height),
     ])
     .areas(area);
 
+    draw_current_streak(frame, app, streak_area);
     draw_kpis(frame, app, kpi_area);
     draw_scope_projects(frame, app, projects_area);
     draw_category_bar(frame, app, category_area);
     draw_year_over_year(frame, app, yoy_area);
 }
 
+/// `7 days`, and `1 day` rather than `1 days`.
+fn days_label(days: u32) -> String {
+    if days == 1 {
+        "1 day".to_string()
+    } else {
+        format!("{} days", thousands(days as i64))
+    }
+}
+
+/// The current streak, centered above the panels.
+///
+/// Centered rather than set in the left-aligned rhythm of everything else,
+/// because it is the one figure on the screen that is not describing a period:
+/// it answers "am I still going", which is the question the screen gets opened
+/// for. For the same reason it does not move when the year selector does.
+///
+/// A zero is reported in the label's own colour rather than emphasised. The line
+/// exists to mark a run worth protecting, and setting a broken one in bold would
+/// give the screen's loudest position to the least welcome number on it.
+fn draw_current_streak(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let days = app.stats.current_streak;
+    let value_style = if days == 0 {
+        theme::label()
+    } else {
+        theme::focused()
+    };
+    let line = Line::from(vec![
+        Span::styled("Current streak: ", theme::label()),
+        Span::styled(days_label(days), value_style),
+    ]);
+    frame.render_widget(
+        Paragraph::new(line)
+            .alignment(Alignment::Center)
+            .style(theme::base()),
+        area,
+    );
+}
+
 fn kpi_panel<'a>(
     title: String,
     totals: &crate::db::stats::Totals,
     completed: i64,
+    streak: u32,
 ) -> Paragraph<'a> {
     let kpi = |label: &'static str, value: String| -> Line<'static> {
         Line::from(vec![
@@ -1034,6 +1103,7 @@ fn kpi_panel<'a>(
                 .map(|r| format!("{r:.0}"))
                 .unwrap_or_else(|| "—".to_string()),
         ),
+        kpi("Best Streak", days_label(streak)),
     ];
     Paragraph::new(lines).block(
         Block::bordered()
@@ -1053,6 +1123,7 @@ fn draw_kpis(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 " All time ".to_string(),
                 &stats.lifetime,
                 stats.lifetime_completed,
+                stats.lifetime_streak,
             ),
             area,
         );
@@ -1065,6 +1136,7 @@ fn draw_kpis(frame: &mut Frame<'_>, app: &App, area: Rect) {
             " Lifetime ".to_string(),
             &stats.lifetime,
             stats.lifetime_completed,
+            stats.lifetime_streak,
         ),
         left,
     );
@@ -1074,7 +1146,12 @@ fn draw_kpis(frame: &mut Frame<'_>, app: &App, area: Rect) {
         format!(" {} ", stats.scope.label())
     };
     frame.render_widget(
-        kpi_panel(title, &stats.selected, stats.selected_completed),
+        kpi_panel(
+            title,
+            &stats.selected,
+            stats.selected_completed,
+            stats.selected_streak,
+        ),
         right,
     );
 }
