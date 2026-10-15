@@ -5,6 +5,9 @@
 //! tests assert both the shape of the data and the presence of the awkward cases
 //! it exists to show.
 
+use std::collections::BTreeSet;
+
+use chrono::{Datelike, Duration, Local};
 use draft_tracker::MIN_SESSION_HOURS;
 use draft_tracker::db::models::Status;
 use draft_tracker::db::{Db, repo, stats};
@@ -100,14 +103,40 @@ fn every_category_has_a_type_and_every_project_a_category() {
     );
 }
 
+/// The settled history spans 2023 to 2026, and the daily project adds whichever
+/// year or two its run falls in.
+///
+/// Spelled out as an exact set rather than as "four consecutive years", which is
+/// what this asserted while every date was fixed. The daily project is dated from
+/// the clock, so that assertion passed on the day it was written and would have
+/// failed on 1 January 2027 with nothing in this crate having changed. A test that
+/// breaks on a date rather than on a mistake is worse than no test, because the
+/// failure teaches the reader to distrust the suite.
 #[test]
-fn covers_four_calendar_years() {
+fn covers_the_settled_history_and_the_run_up_to_today() {
     let (_, summary) = generated();
-    assert_eq!(summary.years.len(), 4, "years: {:?}", summary.years);
-    // Consecutive, so the stats screen's year navigation has no gaps to step over.
-    for pair in summary.years.windows(2) {
-        assert_eq!(pair[1], pair[0] + 1, "years: {:?}", summary.years);
-    }
+
+    // The run ends yesterday and is fourteen days long, so it touches yesterday's
+    // year and the year thirteen days before it -- the same year, except across a
+    // new year, where both belong on the list.
+    let last = Local::now()
+        .date_naive()
+        .pred_opt()
+        .expect("there is a day before today");
+    let first = last - Duration::days(13);
+
+    let expected: BTreeSet<i32> = [2023, 2024, 2025, 2026, first.year(), last.year()]
+        .into_iter()
+        .collect();
+    let actual: BTreeSet<i32> = summary.years.iter().copied().collect();
+    assert_eq!(actual, expected, "years: {:?}", summary.years);
+
+    // Ascending, because the stats screen walks them in order.
+    assert!(
+        summary.years.windows(2).all(|p| p[0] < p[1]),
+        "years: {:?}",
+        summary.years
+    );
 }
 
 #[test]
@@ -286,6 +315,12 @@ fn the_screens_have_something_to_show() {
     }
 }
 
+/// Two runs produce the same summary.
+///
+/// Determinism given a fixed today, rather than across all time: the daily
+/// project's dates come from the clock. That is the property worth having, since
+/// it is what keeps the word and hour totals -- and so every figure in the
+/// README -- reproducible from the command alone.
 #[test]
 fn generation_is_deterministic() {
     let (_, first) = generated();

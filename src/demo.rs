@@ -12,10 +12,12 @@
 //! spanning two calendar years, an abandoned project, a project with a single
 //! entry, and more projects in one year than the stats graph can display at once.
 //!
-//! Generation is deterministic, so the same command always produces the same
-//! database and a screenshot taken from it stays accurate.
+//! Word counts, hours and the shape of every session are deterministic, so the
+//! same command always produces the same totals. The one project written daily is
+//! dated from the clock instead, so that reseeding always produces a live streak
+//! rather than one that expired whenever this was last edited. See [`Start`].
 
-use chrono::{Datelike, Duration, NaiveDate};
+use chrono::{Datelike, Duration, Local, NaiveDate};
 
 use crate::db::models::{NewEntry, Status};
 use crate::db::{Db, DbError, repo};
@@ -41,6 +43,22 @@ pub struct Summary {
     pub years: Vec<i32>,
 }
 
+/// When a project's first session falls.
+enum Start {
+    /// A fixed calendar date. The settled history uses these, so the year totals
+    /// and the year-over-year graph are the same on every run.
+    On(i32, u32, u32),
+    /// Counted back from today, so the run always ends yesterday however long
+    /// after this was written the generator is run.
+    ///
+    /// This is what makes a reseeded database show a working streak instead of an
+    /// expired one, and it is deliberately the only thing in here that reads the
+    /// clock. A project dated this way is also written on consecutive days, which
+    /// is the rule the loop below applies: the two go together, since a run with
+    /// gaps in it would be no streak at all.
+    DaysBeforeToday(i64),
+}
+
 /// Titles are invented. They read like projects so the screens look like a real
 /// log, and belong to nobody.
 struct Spec {
@@ -48,7 +66,7 @@ struct Spec {
     category: &'static str,
     status: Status,
     /// First session.
-    start: (i32, u32, u32),
+    start: Start,
     sessions: usize,
     /// Words per session, low and high.
     words: (i64, i64),
@@ -75,7 +93,7 @@ const PROJECTS: [Spec; 19] = [
         title: "Winter Harbour",
         category: "Novel",
         status: Status::Completed,
-        start: (2023, 2, 6),
+        start: Start::On(2023, 2, 6),
         sessions: 48,
         words: (700, 1900),
     },
@@ -83,7 +101,7 @@ const PROJECTS: [Spec; 19] = [
         title: "Paper Birds",
         category: "Short Story",
         status: Status::Completed,
-        start: (2023, 5, 15),
+        start: Start::On(2023, 5, 15),
         sessions: 6,
         words: (600, 1400),
     },
@@ -91,7 +109,7 @@ const PROJECTS: [Spec; 19] = [
         title: "On Keeping Time",
         category: "Essay",
         status: Status::Completed,
-        start: (2023, 8, 3),
+        start: Start::On(2023, 8, 3),
         sessions: 3,
         words: (800, 1600),
     },
@@ -99,7 +117,7 @@ const PROJECTS: [Spec; 19] = [
         title: "The Orchard Gate",
         category: "Short Story",
         status: Status::Completed,
-        start: (2023, 10, 9),
+        start: Start::On(2023, 10, 9),
         sessions: 5,
         words: (500, 1500),
     },
@@ -108,7 +126,7 @@ const PROJECTS: [Spec; 19] = [
         title: "Quiet Machines",
         category: "Short Story",
         status: Status::Completed,
-        start: (2024, 3, 4),
+        start: Start::On(2024, 3, 4),
         sessions: 4,
         words: (700, 1800),
     },
@@ -116,7 +134,7 @@ const PROJECTS: [Spec; 19] = [
         title: "Matchlight",
         category: "Flash Fiction",
         status: Status::Completed,
-        start: (2024, 4, 18),
+        start: Start::On(2024, 4, 18),
         sessions: 1,
         words: (900, 900),
     },
@@ -124,7 +142,7 @@ const PROJECTS: [Spec; 19] = [
         title: "Nine Doors",
         category: "Short Story",
         status: Status::Abandoned,
-        start: (2024, 6, 11),
+        start: Start::On(2024, 6, 11),
         sessions: 3,
         words: (300, 900),
     },
@@ -132,7 +150,7 @@ const PROJECTS: [Spec; 19] = [
         title: "Notes from a Desk",
         category: "Blog Post",
         status: Status::Completed,
-        start: (2024, 7, 2),
+        start: Start::On(2024, 7, 2),
         sessions: 1,
         words: (1100, 1100),
     },
@@ -141,7 +159,7 @@ const PROJECTS: [Spec; 19] = [
         title: "The Tin Road",
         category: "Novel",
         status: Status::Completed,
-        start: (2024, 10, 7),
+        start: Start::On(2024, 10, 7),
         sessions: 42,
         words: (650, 1800),
     },
@@ -150,7 +168,7 @@ const PROJECTS: [Spec; 19] = [
         title: "Against Outlines",
         category: "Essay",
         status: Status::Completed,
-        start: (2025, 3, 11),
+        start: Start::On(2025, 3, 11),
         sessions: 2,
         words: (900, 1700),
     },
@@ -158,7 +176,7 @@ const PROJECTS: [Spec; 19] = [
         title: "The Last Ferry",
         category: "Short Story",
         status: Status::Completed,
-        start: (2025, 4, 1),
+        start: Start::On(2025, 4, 1),
         sessions: 5,
         words: (600, 1600),
     },
@@ -166,7 +184,7 @@ const PROJECTS: [Spec; 19] = [
         title: "Thumbprint",
         category: "Flash Fiction",
         status: Status::Completed,
-        start: (2025, 5, 20),
+        start: Start::On(2025, 5, 20),
         sessions: 1,
         words: (750, 750),
     },
@@ -174,7 +192,7 @@ const PROJECTS: [Spec; 19] = [
         title: "Glasshouse",
         category: "Short Story",
         status: Status::Completed,
-        start: (2025, 7, 8),
+        start: Start::On(2025, 7, 8),
         sessions: 7,
         words: (550, 1500),
     },
@@ -182,7 +200,7 @@ const PROJECTS: [Spec; 19] = [
         title: "Why I Keep a Log",
         category: "Blog Post",
         status: Status::Completed,
-        start: (2025, 9, 16),
+        start: Start::On(2025, 9, 16),
         sessions: 1,
         words: (1300, 1300),
     },
@@ -190,7 +208,7 @@ const PROJECTS: [Spec; 19] = [
         title: "Low Tide",
         category: "Short Story",
         status: Status::Open,
-        start: (2025, 11, 4),
+        start: Start::On(2025, 11, 4),
         sessions: 2,
         words: (400, 1200),
     },
@@ -199,7 +217,7 @@ const PROJECTS: [Spec; 19] = [
         title: "Reading Slowly",
         category: "Blog Post",
         status: Status::Completed,
-        start: (2026, 1, 13),
+        start: Start::On(2026, 1, 13),
         sessions: 1,
         words: (950, 950),
     },
@@ -207,7 +225,7 @@ const PROJECTS: [Spec; 19] = [
         title: "Salt Lantern",
         category: "Novel",
         status: Status::Open,
-        start: (2026, 1, 26),
+        start: Start::On(2026, 1, 26),
         sessions: 14,
         words: (700, 1700),
     },
@@ -215,25 +233,21 @@ const PROJECTS: [Spec; 19] = [
         title: "The Cost of Revision",
         category: "Essay",
         status: Status::Open,
-        start: (2026, 2, 17),
+        start: Start::On(2026, 2, 17),
         sessions: 2,
         words: (850, 1500),
     },
-    // Written every day, so the dashboard has a streak to show. It must be last
-    // in this list: the loop below spaces every other project's sessions out at
-    // random and gives only the final one consecutive days.
+    // Written every day, so the dashboard always has a streak to show. Dated back
+    // from the clock rather than pinned to a calendar date: a fixed run expires,
+    // and a demonstration whose headline feature reads zero demonstrates nothing.
     //
-    // The run ends on a fixed date rather than being counted back from the clock,
-    // which keeps the generator deterministic and the README screenshots true to
-    // what it produces. The cost is that the *current* streak goes quiet once that
-    // date is more than a day old, while the best-streak figures stay correct
-    // forever. Counting back from today instead would keep it permanently alive at
-    // the price of a demo database whose dates move between runs.
+    // Fourteen sessions ending yesterday, which leaves today deliberately empty so
+    // that logging a session moves the figure on by one.
     Spec {
         title: "Daybook",
         category: "Blog Post",
         status: Status::Open,
-        start: (2026, 9, 29),
+        start: Start::DaysBeforeToday(14),
         sessions: 14,
         words: (350, 900),
     },
@@ -281,6 +295,7 @@ pub fn populate(db: &mut Db) -> Result<Summary, DemoError> {
     let tx = db.conn_mut().transaction().map_err(DbError::from)?;
     let conn = &*tx;
     let mut rng = Rng(0x5eed_1234_abcd_ef01);
+    let today = Local::now().date_naive();
 
     for (name, description) in TYPES {
         repo::insert_type(conn, name, Some(description))?;
@@ -299,8 +314,13 @@ pub fn populate(db: &mut Db) -> Result<Summary, DemoError> {
         let category_id = repo::category_id_by_name(conn, spec.category)?;
         let project_id = repo::insert_project(conn, spec.title, category_id, spec.status, None)?;
 
-        let mut date = NaiveDate::from_ymd_opt(spec.start.0, spec.start.1, spec.start.2)
-            .expect("the specs hold real dates");
+        let mut date = match spec.start {
+            Start::On(y, m, d) => {
+                NaiveDate::from_ymd_opt(y, m, d).expect("the specs hold real dates")
+            }
+            // One short of the session count, so the last session lands yesterday.
+            Start::DaysBeforeToday(n) => today - Duration::days(n),
+        };
 
         for session in 0..spec.sessions {
             let (words, hours, note) = session_shape(&mut rng, spec, index, session);
@@ -339,12 +359,11 @@ pub fn populate(db: &mut Db) -> Result<Summary, DemoError> {
                 hours_total += 0.5;
             }
 
-            // The daily project runs without gaps; everything else is spaced the
-            // way real work is.
-            date += Duration::days(if index == PROJECTS.len() - 1 {
-                1
-            } else {
-                rng.between(1, 4)
+            // A project dated from the clock is the daily one and runs without
+            // gaps; everything else is spaced the way real work is.
+            date += Duration::days(match spec.start {
+                Start::DaysBeforeToday(_) => 1,
+                Start::On(..) => rng.between(1, 4),
             });
         }
     }
