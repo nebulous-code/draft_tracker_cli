@@ -69,7 +69,7 @@ const CATEGORIES: [(&str, &str); 5] = [
 
 /// Four years of work, weighted so that no year looks like any other and 2025
 /// holds more projects than the stats graph can show at once.
-const PROJECTS: [Spec; 18] = [
+const PROJECTS: [Spec; 19] = [
     // 2023
     Spec {
         title: "Winter Harbour",
@@ -219,6 +219,24 @@ const PROJECTS: [Spec; 18] = [
         sessions: 2,
         words: (850, 1500),
     },
+    // Written every day, so the dashboard has a streak to show. It must be last
+    // in this list: the loop below spaces every other project's sessions out at
+    // random and gives only the final one consecutive days.
+    //
+    // The run ends on a fixed date rather than being counted back from the clock,
+    // which keeps the generator deterministic and the README screenshots true to
+    // what it produces. The cost is that the *current* streak goes quiet once that
+    // date is more than a day old, while the best-streak figures stay correct
+    // forever. Counting back from today instead would keep it permanently alive at
+    // the price of a demo database whose dates move between runs.
+    Spec {
+        title: "Daybook",
+        category: "Blog Post",
+        status: Status::Open,
+        start: (2026, 9, 29),
+        sessions: 14,
+        words: (350, 900),
+    },
 ];
 
 /// Hours a session might take, in quarter hours, which is how the application
@@ -321,7 +339,13 @@ pub fn populate(db: &mut Db) -> Result<Summary, DemoError> {
                 hours_total += 0.5;
             }
 
-            date += Duration::days(rng.between(1, 4));
+            // The daily project runs without gaps; everything else is spaced the
+            // way real work is.
+            date += Duration::days(if index == PROJECTS.len() - 1 {
+                1
+            } else {
+                rng.between(1, 4)
+            });
         }
     }
 

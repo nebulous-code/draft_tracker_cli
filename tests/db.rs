@@ -510,6 +510,41 @@ fn entry_dates_come_back_distinct_and_in_order() {
     assert!(stats::entry_dates(conn, Some(2024)).unwrap().is_empty());
 }
 
+/// Any entry counts as a day written: a session that cut words, or that bought
+/// time and produced none, still kept the appointment.
+///
+/// The rule lives in what this query selects rather than in the arithmetic, so a
+/// `WHERE session_word_count > 0` added here would silently make the streak a
+/// production measure and every test in `streaks.rs` would still pass. It breaks
+/// on exactly the days that are hardest to show up for, which is why it is pinned
+/// where the decision actually is.
+#[test]
+fn a_revision_day_and_a_wordless_day_both_count_towards_a_streak() {
+    let db = Db::open_in_memory().unwrap();
+    let conn = db.conn();
+    let project =
+        repo::insert_project(conn, "The Cost of Revision", None, Status::Open, None).unwrap();
+    add(&db, project, day(2026, 4, 1), 900, 2.0);
+    add(&db, project, day(2026, 4, 2), -1_228, 1.5); // a day spent cutting
+    add(&db, project, day(2026, 4, 3), 0, 1.0); // a day spent thinking
+    add(&db, project, day(2026, 4, 4), 400, 1.0);
+
+    assert_eq!(
+        stats::entry_dates(conn, None).unwrap().len(),
+        4,
+        "all four days are days at the desk"
+    );
+    assert_eq!(
+        streaks::longest(&stats::entry_dates(conn, None).unwrap()),
+        4,
+        "a cut and a wordless day must not break the run"
+    );
+    assert_eq!(
+        streaks::current(&stats::entry_dates(conn, None).unwrap(), day(2026, 4, 4)),
+        4
+    );
+}
+
 /// Clipping, end to end: the same run of days gives the two years their halves
 /// and all time the whole, which is the rule the feature was asked for.
 #[test]

@@ -7,7 +7,7 @@ You tell it what a manuscript currently stands at, and it works out the session 
 ```sh
 $ draft-tracker log salt 15982 1 -n "a good morning"
   Project      Salt Lantern
-  Date         2026-10-08
+  Date         2026-10-13
   Hours        1.00
   Project WC   15,982
                logged so far 15,310
@@ -23,7 +23,7 @@ Saved. Salt Lantern is now at 15,982 words.
 
 It is for someone who already keeps a writing log, probably in a spreadsheet, and has started wanting to ask questions of it. How many hours went into that novella. Whether this year is ahead of last. What a realistic words-per-hour actually is, as opposed to what it feels like on a good day.
 
-It assumes you work in a terminal and are comfortable in vim. It tracks words, time, projects and notes, and nothing else: no goal nagging, no streak gamification, no sync, no account.
+It assumes you work in a terminal and are comfortable in vim. It tracks words, time, projects and notes, and nothing else: no goal nagging, no sync, no account. It does count your streak, because a run of days is worth knowing about, but a broken one is reported as plainly as any other number rather than flashed at you.
 
 It will import years of existing spreadsheets, which is the only sensible way to start.
 
@@ -33,11 +33,11 @@ It will import years of existing spreadsheets, which is the only sensible way to
 
 ```
  Draft Tracker · Entry
-┌ Session ───────────────────────────────────────────────┐┌ Projects (3) ────────────────┐
-│                                                        ││  Low Tide                    │
-│ Date        2026-10-08                                 ││› Salt Lantern                │
-│ Project     Salt Lantern  logged so far 15,310         ││  The Cost of Revision        │
-│ Hours       1                                          ││                              │
+┌ Session ───────────────────────────────────────────────┐┌ Projects (4) ────────────────┐
+│                                                        ││  Daybook                     │
+│ Date        2026-10-13                                 ││  Low Tide                    │
+│ Project     Salt Lantern  logged so far 15,310         ││› Salt Lantern                │
+│ Hours       1                                          ││  The Cost of Revision        │
 │▌Project WC  15982                                      ││                              │
 │ Notes       —                                          ││                              │
 │                                                        ││                              │
@@ -54,13 +54,13 @@ The dashboard answers the questions a spreadsheet makes hard. `j` and `k` walk b
 
 ```
  Draft Tracker · Stats
-                                  Current streak: 0 days
+                                  Current streak: 14 days
 ┌ Lifetime ─────────────────────────────────┐┌ 2025 ─────────────────────────────────────┐
-│ Words       171,725                       ││ Words       25,858                        │
-│ Hours       188.00                        ││ Hours       27.50                         │
+│ Words       180,513                       ││ Words       25,858                        │
+│ Hours       207.25                        ││ Hours       27.50                         │
 │ Completed   14                            ││ Completed   6                             │
-│ Words/Hour  913                           ││ Words/Hour  940                           │
-│ Best Streak 4 days                        ││ Best Streak 2 days                        │
+│ Words/Hour  871                           ││ Words/Hour  940                           │
+│ Best Streak 14 days                       ││ Best Streak 2 days                        │
 └───────────────────────────────────────────┘└───────────────────────────────────────────┘
 ┌ 2025 projects (1–4 of 7) ──────────────────────────────────────────────────────────────┐
 │ Glasshouse █████████████████████████████████████████████████████████████████     7,647 │
@@ -78,7 +78,7 @@ The dashboard answers the questions a spreadsheet makes hard. `j` and `k` walk b
 │ 2023 ██████████████████████████████████████████████████████████████████████    73,743  │
 │ 2024 ██████████████████████████████████████████████████▌                       53,194  │
 │ 2025 ████████████████████████▌                                                 25,858  │
-│ 2026 ██████████████████                                                        18,930  │
+│ 2026 ██████████████████████████▎                                               27,718  │
 └────────────────────────────────────────────────────────────────────────────────────────┘
  by year  ·  j k year  ·  h l scroll  ·  0 now  ·  $ all time  ·  ? help  ·  q quit
 ```
